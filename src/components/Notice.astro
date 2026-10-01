@@ -4,11 +4,13 @@ interface Props {
   hint?: string;
   id?: string;
   headingId?: string;
+  /** Lets a script replace the hint, which is the only place a page can explain itself. */
+  hintId?: string;
   class?: string;
   hidden?: boolean;
 }
 
-const { heading, hint, id, headingId, class: className, hidden = false } = Astro.props;
+const { heading, hint, id, headingId, hintId, class: className, hidden = false } = Astro.props;
 ---
 
 <section
@@ -19,5 +21,5 @@ const { heading, hint, id, headingId, class: className, hidden = false } = Astro
   hidden={hidden ? true : undefined}
 >
   <h2 class="panel-title" id={headingId}>{heading}</h2>
-  {hint && <p class="note">{hint}</p>}
+  {hint && <p class="note" id={hintId}>{hint}</p>}
 </section>

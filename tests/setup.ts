@@ -32,8 +32,11 @@ function assertIsolatedDatabase(url: string): void {
 }
 
 /**
- * Apply environment overrides, drop the memoized configuration and empty both
- * tables so a test never observes rows from another test.
+ * Apply environment overrides, drop the memoized configuration and empty every
+ * table the suite writes, so a test never observes rows from another test.
+ *
+ * Receipts are cleared alongside the secrets they describe: a leftover receipt
+ * would answer for a control token the next test just created.
  */
 export async function resetEnv(
   overrides: Readonly<Record<string, string | undefined>> = {},
@@ -43,6 +46,7 @@ export async function resetEnv(
     else process.env[key] = value;
   }
   resetConfigCache();
+  await query('DELETE FROM secret_receipts');
   await query('DELETE FROM secrets');
   await query('DELETE FROM rate_limits');
 }

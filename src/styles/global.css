@@ -246,7 +246,7 @@ label {
 
 input[type="text"],
 input[type="password"],
-input[type="number"],
+select,
 textarea {
   width: 100%;
   min-height: 44px;
@@ -261,6 +261,18 @@ textarea {
   transition: border-color var(--transition), background-color var(--transition);
 }
 
+/* The dropdown list itself is drawn by the platform, outside the page palette. */
+select {
+  appearance: none;
+  padding-right: 32px;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: right 16px center, right 11px center;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  cursor: pointer;
+}
+
 textarea {
   min-height: 140px;
   resize: vertical;
@@ -270,7 +282,7 @@ textarea {
 
 input[type="text"]:hover,
 input[type="password"]:hover,
-input[type="number"]:hover,
+select:hover,
 textarea:hover {
   border-color: var(--border-hover);
 }
@@ -291,14 +303,8 @@ textarea[aria-invalid="true"] {
   gap: 10px;
 }
 
-.control input[type="number"] {
-  width: 104px;
-  flex: 0 0 auto;
-}
-
-.suffix {
-  font-family: var(--font-mono);
-  font-size: 0.8125rem;
+/* Control link: every state other than pending is terminal, so it reads quieter. */
+.notice-message.state-closed {
   color: var(--text-muted);
 }
 

@@ -5,6 +5,13 @@
  */
 export type Locale = 'it' | 'en';
 
+/**
+ * The four expiry presets, duplicated as a plain type so this module keeps no
+ * dependency on `secrets.ts`: the dictionaries are imported by pages, tests and
+ * components that have no business loading the database layer.
+ */
+export type ExpiryPreset = '1h' | '1d' | '7d' | '30d';
+
 export const LOCALES: readonly Locale[] = ['it', 'en'];
 export const DEFAULT_LOCALE: Locale = 'en';
 export const LOCALE_COOKIE = 'locale';
@@ -24,7 +31,7 @@ export type Dictionary = {
     secretPlaceholder: string;
     secretHint: string;
     expiryLabel: string;
-    expirySuffix: string;
+    expiryOptions: Record<ExpiryPreset, string>;
     passwordLabel: string;
     passwordShow: string;
     passwordHide: string;
@@ -36,12 +43,14 @@ export type Dictionary = {
   result: {
     title: string;
     linkLabel: string;
+    controlLabel: string;
     copy: string;
     copied: string;
     copyFailed: string;
     expires: string;
-    days: string;
     another: string;
+    passwordLabel: string;
+    noteKeyInFragment: string;
   };
   open: {
     title: string;
@@ -52,7 +61,21 @@ export type Dictionary = {
     reveal: string;
     revealing: string;
     unavailable: string;
+    missingKey: string;
+    keyFailed: string;
     noteSingleRead: string;
+  };
+  control: {
+    title: string;
+    pending: string;
+    read: string;
+    expired: string;
+    cancelled: string;
+    unavailable: string;
+    expires: string;
+    cancel: string;
+    cancelling: string;
+    cancelFailed: string;
   };
   secret: {
     title: string;
@@ -63,8 +86,8 @@ export type Dictionary = {
     consumedHint: string;
   };
   errors: {
-    secretRequired: string;
-    secretTooLong: string;
+    payloadRequired: string;
+    payloadTooLong: string;
     invalidExpiry: string;
     passwordTooLong: string;
     badPassword: string;
@@ -95,8 +118,8 @@ const it: Dictionary = {
     secretLabel: 'Segreto',
     secretPlaceholder: 'Testo del segreto',
     secretHint: 'Massimo 50 KiB',
-    expiryLabel: 'Scadenza · giorni',
-    expirySuffix: 'giorni',
+    expiryLabel: 'Scadenza',
+    expiryOptions: { '1h': '1 ora', '1d': '1 giorno', '7d': '7 giorni', '30d': '30 giorni' },
     passwordLabel: 'Password · opzionale',
     passwordShow: 'Mostra password',
     passwordHide: 'Nascondi password',
@@ -109,12 +132,14 @@ const it: Dictionary = {
   result: {
     title: 'Link pronto',
     linkLabel: 'Link monouso',
+    controlLabel: 'Link di controllo',
     copy: 'Copia',
     copied: 'Copiato',
     copyFailed: 'Copia non riuscita',
     expires: 'Scadenza',
-    days: 'giorni',
     another: 'Nuovo segreto',
+    passwordLabel: 'Password',
+    noteKeyInFragment: 'La chiave è nel link, dopo #',
   },
 
   open: {
@@ -126,7 +151,22 @@ const it: Dictionary = {
     reveal: 'Mostra segreto',
     revealing: 'Lettura…',
     unavailable: 'Link non disponibile',
+    missingKey: 'Link senza chiave',
+    keyFailed: 'Chiave non valida',
     noteSingleRead: 'Una sola lettura. Nessun recupero',
+  },
+
+  control: {
+    title: 'Controllo',
+    pending: 'In attesa',
+    read: 'Letto',
+    expired: 'Scaduto',
+    cancelled: 'Annullato',
+    unavailable: 'Link non disponibile',
+    expires: 'Scadenza',
+    cancel: 'Annulla segreto',
+    cancelling: 'Annullamento…',
+    cancelFailed: 'Annullamento non riuscito',
   },
 
   secret: {
@@ -139,9 +179,9 @@ const it: Dictionary = {
   },
 
   errors: {
-    secretRequired: 'Inserisci un segreto',
-    secretTooLong: 'Limite 50 KiB',
-    invalidExpiry: 'Scadenza da 1 a 30 giorni',
+    payloadRequired: 'Inserisci un segreto',
+    payloadTooLong: 'Limite 50 KiB',
+    invalidExpiry: 'Scadenza non valida',
     passwordTooLong: 'Password troppo lunga',
     badPassword: 'Password errata',
     unavailable: 'Link non disponibile',
@@ -169,8 +209,8 @@ const en: Dictionary = {
     secretLabel: 'Secret',
     secretPlaceholder: 'Secret text',
     secretHint: '50 KiB max',
-    expiryLabel: 'Expires in · days',
-    expirySuffix: 'days',
+    expiryLabel: 'Expires in',
+    expiryOptions: { '1h': '1 hour', '1d': '1 day', '7d': '7 days', '30d': '30 days' },
     passwordLabel: 'Password · optional',
     passwordShow: 'Show password',
     passwordHide: 'Hide password',
@@ -183,12 +223,14 @@ const en: Dictionary = {
   result: {
     title: 'Link ready',
     linkLabel: 'One-time link',
+    controlLabel: 'Control link',
     copy: 'Copy',
     copied: 'Copied',
     copyFailed: 'Copy failed',
     expires: 'Expires',
-    days: 'days',
     another: 'New secret',
+    passwordLabel: 'Password',
+    noteKeyInFragment: 'The key is in the link, after #',
   },
 
   open: {
@@ -200,7 +242,22 @@ const en: Dictionary = {
     reveal: 'Reveal secret',
     revealing: 'Reading…',
     unavailable: 'Link unavailable',
+    missingKey: 'Link without a key',
+    keyFailed: 'Invalid key',
     noteSingleRead: 'One read only. No recovery',
+  },
+
+  control: {
+    title: 'Control',
+    pending: 'Pending',
+    read: 'Read',
+    expired: 'Expired',
+    cancelled: 'Cancelled',
+    unavailable: 'Link unavailable',
+    expires: 'Expires',
+    cancel: 'Cancel secret',
+    cancelling: 'Cancelling…',
+    cancelFailed: 'Cancellation failed',
   },
 
   secret: {
@@ -213,9 +270,9 @@ const en: Dictionary = {
   },
 
   errors: {
-    secretRequired: 'Enter a secret',
-    secretTooLong: '50 KiB limit',
-    invalidExpiry: 'Expiry from 1 to 30 days',
+    payloadRequired: 'Enter a secret',
+    payloadTooLong: '50 KiB limit',
+    invalidExpiry: 'Invalid expiry',
     passwordTooLong: 'Password too long',
     badPassword: 'Incorrect password',
     unavailable: 'Link unavailable',

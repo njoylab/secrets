@@ -131,7 +131,18 @@ describe('dictionaries', () => {
     expect([...italian.keys()].sort()).toEqual([...english.keys()].sort());
     // Every group named by the specification is present and nested, never a
     // leaf string, so a group can grow without changing the comparison.
-    for (const group of ['meta', 'language', 'nav', 'create', 'result', 'open', 'secret', 'errors', 'footer']) {
+    for (const group of [
+      'meta',
+      'language',
+      'nav',
+      'create',
+      'result',
+      'open',
+      'control',
+      'secret',
+      'errors',
+      'footer',
+    ]) {
       expect(italian.has(group), group).toBe(false);
       expect([...italian.keys()].filter((key) => key.startsWith(`${group}.`)).length, group).toBeGreaterThan(0);
     }
@@ -148,8 +159,8 @@ describe('dictionaries', () => {
 
   it('localizes every error key', () => {
     const errorKeys: ReadonlyArray<keyof Dictionary['errors']> = [
-      'secretRequired',
-      'secretTooLong',
+      'payloadRequired',
+      'payloadTooLong',
       'invalidExpiry',
       'passwordTooLong',
       'badPassword',
@@ -182,10 +193,10 @@ describe('dictionaries', () => {
 });
 
 describe('wording required by PIANO_SVILUPPO.md', () => {
-  // Exactly the pairs listed in section 4 of the specification.
+  // Exactly the pairs listed in section 4 of the specification, plus the two that
+  // replaced the numeric expiry field and the two the control link added.
   const required: ReadonlyArray<readonly [it: string, en: string]> = [
     ['Segreto', 'Secret'],
-    ['Scadenza · giorni', 'Expires in · days'],
     ['Password · opzionale', 'Password · optional'],
     ['Crea link', 'Create link'],
     ['Copia', 'Copy'],
@@ -193,6 +204,7 @@ describe('wording required by PIANO_SVILUPPO.md', () => {
     ['Mostra segreto', 'Reveal secret'],
     ['Password errata', 'Incorrect password'],
     ['Link non disponibile', 'Link unavailable'],
+    ['Annulla segreto', 'Cancel secret'],
   ];
 
   it.each(required)('uses "%s" / "%s"', (italian, english) => {
@@ -217,6 +229,69 @@ describe('wording required by PIANO_SVILUPPO.md', () => {
     // The same two notes, reused on the opening screen.
     expect(it.open.noteSingleRead).toBe('Una sola lettura. Nessun recupero');
     expect(en.open.noteSingleRead).toBe('One read only. No recovery');
+  });
+
+  it('keeps the expiry labels paired by key, not by repeated text', () => {
+    // "Scadenza" is also the label of the expiry shown after creation and on the
+    // control page, so these three cannot be matched by value the way the required
+    // pairs above are: they are pinned by path instead.
+    expect(getDictionary('it').create.expiryLabel).toBe('Scadenza');
+    expect(getDictionary('en').create.expiryLabel).toBe('Expires in');
+    expect(getDictionary('it').result.expires).toBe('Scadenza');
+    expect(getDictionary('en').result.expires).toBe('Expires');
+    expect(getDictionary('it').control.expires).toBe('Scadenza');
+    expect(getDictionary('en').control.expires).toBe('Expires');
+  });
+
+  it('labels the two links of the result panel distinctly', () => {
+    // The share link and the control link are different things, so they cannot
+    // share a label: the panel shows both at once.
+    const it = getDictionary('it');
+    const en = getDictionary('en');
+    expect(it.result.linkLabel).toBe('Link monouso');
+    expect(en.result.linkLabel).toBe('One-time link');
+    expect(it.result.controlLabel).toBe('Link di controllo');
+    expect(en.result.controlLabel).toBe('Control link');
+    expect(it.result.linkLabel).not.toBe(it.result.controlLabel);
+    expect(en.result.linkLabel).not.toBe(en.result.controlLabel);
+  });
+
+  it('offers the four expiry presets in the same order in both languages', () => {
+    const it = getDictionary('it').create.expiryOptions;
+    const en = getDictionary('en').create.expiryOptions;
+    const presets: ReadonlyArray<'1h' | '1d' | '7d' | '30d'> = ['1h', '1d', '7d', '30d'];
+    expect(Object.keys(it)).toEqual([...presets]);
+    expect(Object.keys(en)).toEqual([...presets]);
+    for (const preset of presets) {
+      expect(it[preset].trim().length, preset).toBeGreaterThan(0);
+      expect(en[preset].trim().length, preset).toBeGreaterThan(0);
+    }
+  });
+
+  it('names all four control states in both languages', () => {
+    // Every state readControlStatus can return must have a label, or the page
+    // would render a blank line.
+    const it = getDictionary('it').control;
+    const en = getDictionary('en').control;
+    for (const state of ['pending', 'read', 'expired', 'cancelled', 'unavailable'] as const) {
+      expect(it[state].trim().length, state).toBeGreaterThan(0);
+      expect(en[state].trim().length, state).toBeGreaterThan(0);
+    }
+    // The four states are distinct: two of them sharing a word would hide the
+    // difference between "already read" and "I cancelled it".
+    const values = ['pending', 'read', 'expired', 'cancelled'].map((state) => it[state as 'pending']);
+    expect(new Set(values).size).toBe(4);
+  });
+
+  it('says nowhere that the content is encrypted end to end', () => {
+    // The fragment key is what makes that nearly true, but a claim like this is
+    // exactly what the plan forbids, so the two words are pinned absent.
+    for (const locale of LOCALES) {
+      for (const [path, value] of flattenDictionary(locale)) {
+        expect(value.toLowerCase().includes('end-to-end'), `${locale}:${path}`).toBe(false);
+        expect(value.toLowerCase().includes('crittograf'), `${locale}:${path}`).toBe(false);
+      }
+    }
   });
 
   it('uses no hardcoded placeholder where the dictionary already has one', () => {

@@ -4,7 +4,7 @@
 import { Buffer } from 'node:buffer';
 import { getConfig } from './env.ts';
 import { checkPostOrigin, errorResponse, resolveClientIp } from './http.ts';
-import { consumeRateLimit, CREATE_BUCKET, REVEAL_BUCKET } from './rate-limit.ts';
+import { consumeRateLimit, type RateLimitBucket } from './rate-limit.ts';
 import type { Locale } from './i18n.ts';
 
 export interface RequestContext {
@@ -18,12 +18,17 @@ export type GuardResult = { ok: true; context: RequestContext } | { ok: false; r
 /**
  * Reject cross-origin POSTs before any body is read, then rate limit by client IP.
  * Ordering matters: a cross-origin flood must not consume a subject's quota.
+ *
+ * Cancellations are charged against the reveal budget rather than a fourth set of
+ * numbers: the endpoint takes a token and writes one row, which is exactly what a
+ * reveal attempt does, and a separate quota would only make the limits easier to
+ * reason about by making them wrong.
  */
 export async function guardRequest(
   request: Request,
   locale: Locale,
   peerAddress: string | undefined,
-  bucket: typeof CREATE_BUCKET | typeof REVEAL_BUCKET,
+  bucket: RateLimitBucket,
 ): Promise<GuardResult> {
   const config = getConfig();
   const clientIp = resolveClientIp(request.headers, peerAddress, config.trustedProxies);
@@ -35,7 +40,7 @@ export async function guardRequest(
     return { ok: false, response: errorResponse(locale, 'crossOrigin', 403) };
   }
 
-  const rule = bucket === CREATE_BUCKET ? config.createRateLimit : config.revealRateLimit;
+  const rule = bucket === 'create' ? config.createRateLimit : config.revealRateLimit;
   const result = await consumeRateLimit(bucket, clientIp, rule);
   if (!result.allowed) {
     return { ok: false, response: errorResponse(locale, 'rateLimited', 429, result.retryAfterSeconds) };

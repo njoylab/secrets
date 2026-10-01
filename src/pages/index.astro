@@ -16,9 +16,16 @@ const t = getDictionary(Astro.locals.locale);
 </Layout>
 
 <script>
+  import {
+    encryptPayload,
+    encodeContentKey,
+    generateContentKey,
+  } from '../lib/content-crypto.ts';
+
   interface CreateApiResponse {
     ok?: boolean;
     url?: string;
+    controlUrl?: string;
     expiresAt?: string;
     message?: string;
   }
@@ -26,6 +33,13 @@ const t = getDictionary(Astro.locals.locale);
   /** Deprecated selection based copy, reached only when the Clipboard API is unusable. */
   interface LegacyClipboard {
     execCommand(commandId: string): boolean;
+  }
+
+  /** A copy row: the field to copy from and the button that copies it. */
+  interface BoundCopyRow {
+    readonly field: HTMLInputElement;
+    readonly button: HTMLButtonElement;
+    readonly status: HTMLElement;
   }
 
   const COPY_RESET_DELAY = 1500;
@@ -83,14 +97,19 @@ const t = getDictionary(Astro.locals.locale);
     const status = byId<HTMLElement>('create-status');
     const submit = byId<HTMLButtonElement>('create-submit');
     const secret = byId<HTMLTextAreaElement>('secret');
-    const expiry = byId<HTMLInputElement>('expiry');
+    const expiry = byId<HTMLSelectElement>('expiry');
     const password = byId<HTMLInputElement>('create-password');
-    const link = byId<HTMLInputElement>('result-link');
-    const copyButton = byId<HTMLButtonElement>('result-copy');
     const resultStatus = byId<HTMLElement>('result-status');
     const expiryValue = byId<HTMLElement>('result-expiry-value');
-    const expiryDays = byId<HTMLElement>('result-expiry-days');
+    const expiryPreset = byId<HTMLElement>('result-expiry-preset');
+    const passwordField = byId<HTMLElement>('result-password-field');
+    const passwordEcho = byId<HTMLInputElement>('result-password');
     const another = byId<HTMLButtonElement>('result-another');
+    const resultLink = byId<HTMLInputElement>('result-link');
+    const resultCopy = byId<HTMLButtonElement>('result-copy');
+    const controlLink = byId<HTMLInputElement>('result-control-link');
+    const controlCopy = byId<HTMLButtonElement>('result-control-copy');
+    const passwordCopy = byId<HTMLButtonElement>('result-password-copy');
 
     if (
       !form ||
@@ -100,15 +119,29 @@ const t = getDictionary(Astro.locals.locale);
       !secret ||
       !expiry ||
       !password ||
-      !link ||
-      !copyButton ||
       !resultStatus ||
       !expiryValue ||
-      !expiryDays ||
-      !another
+      !expiryPreset ||
+      !passwordField ||
+      !passwordEcho ||
+      !another ||
+      !resultLink ||
+      !resultCopy ||
+      !controlLink ||
+      !controlCopy ||
+      !passwordCopy
     ) {
       return;
     }
+
+    // Every half of every copy row is on the page, so the rows are whole.
+    const shareRow: BoundCopyRow = { field: resultLink, button: resultCopy, status: resultStatus };
+    const controlRow: BoundCopyRow = { field: controlLink, button: controlCopy, status: resultStatus };
+    const rows: readonly BoundCopyRow[] = [
+      shareRow,
+      controlRow,
+      { field: passwordEcho, button: passwordCopy, status: resultStatus },
+    ];
 
     // Captured once so the closures below keep the narrowed element types.
     const fields = [secret, expiry, password];
@@ -117,16 +150,14 @@ const t = getDictionary(Astro.locals.locale);
     const serverError = formData.errorServer ?? '';
     const secretMax = Number(formData.secretMax ?? 0);
     const passwordMax = Number(formData.passwordMax ?? 0);
-    const minDays = Number(expiry.min);
-    const maxDays = Number(expiry.max);
+    const presets = (formData.expiryPresets ?? '').split(',').filter((entry) => entry.length > 0);
+    const expiryLabels: Readonly<Record<string, string>> = JSON.parse(
+      formData.expiryLabels ?? '{}',
+    ) as Record<string, string>;
     const encoder = new TextEncoder();
 
     const submitIdle = submit.dataset.labelIdle ?? submit.textContent ?? '';
     const submitBusy = submit.dataset.labelBusy ?? submitIdle;
-    const copyIdle = copyButton.dataset.labelIdle ?? '';
-    const copyDone = copyButton.dataset.labelDone ?? '';
-    const copyFailed = copyButton.dataset.labelFailed ?? '';
-    const daysLabel = expiryDays.dataset.labelDays ?? '';
 
     // Original hint associations, so error wiring stays reversible.
     const describedBy = new Map<string, string>();
@@ -134,7 +165,7 @@ const t = getDictionary(Astro.locals.locale);
       describedBy.set(field.id, field.getAttribute('aria-describedby') ?? '');
     }
 
-    let copyTimer = 0;
+    const copyTimers = new Map<HTMLButtonElement, number>();
 
     const clearErrors = (): void => {
       status.textContent = '';
@@ -155,13 +186,12 @@ const t = getDictionary(Astro.locals.locale);
 
     const validate = (): { field: HTMLElement; message: string } | null => {
       if (secret.value.length === 0) {
-        return { field: secret, message: formData.errorSecretRequired ?? '' };
+        return { field: secret, message: formData.errorPayloadRequired ?? '' };
       }
       if (secretMax > 0 && encoder.encode(secret.value).length > secretMax) {
-        return { field: secret, message: formData.errorSecretTooLong ?? '' };
+        return { field: secret, message: formData.errorPayloadTooLong ?? '' };
       }
-      const days = Number(expiry.value);
-      if (!Number.isInteger(days) || days < minDays || days > maxDays) {
+      if (!presets.includes(expiry.value)) {
         return { field: expiry, message: formData.errorInvalidExpiry ?? '' };
       }
       if (passwordMax > 0 && password.value.length > passwordMax) {
@@ -170,14 +200,31 @@ const t = getDictionary(Astro.locals.locale);
       return null;
     };
 
-    const showResult = (payload: CreateApiResponse, days: number): void => {
-      link.value = payload.url ?? '';
+    const resetCopyFeedback = (): void => {
+      for (const row of rows) {
+        const timer = copyTimers.get(row.button);
+        if (timer !== undefined) window.clearTimeout(timer);
+        copyTimers.delete(row.button);
+        row.button.textContent = row.button.dataset.labelIdle ?? '';
+      }
+      resultStatus.textContent = '';
+    };
+
+    const showResult = (payload: CreateApiResponse, preset: string, keyFragment: string): void => {
+      const share = payload.url ?? '';
+      // The content key stays in the fragment: browsers never send it, so this is
+      // the only place the two halves meet.
+      shareRow.field.value = `${share}#${keyFragment}`;
+      controlRow.field.value = payload.controlUrl ?? '';
+      expiryPreset.textContent = expiryLabels[preset] ?? '';
       expiryValue.textContent = formatInstant(payload.expiresAt ?? '', expiryValue.dataset.locale ?? 'en');
-      expiryDays.textContent = daysLabel ? `${days} ${daysLabel}` : '';
+      // The password leaves the form only when it was actually set, and only into
+      // this page: it never returns in a response body and never enters a link.
+      passwordEcho.value = password.value;
+      passwordField.hidden = password.value.length === 0;
       resultStatus.textContent = '';
       // The plaintext has left the page: drop it from the DOM as well.
       secret.value = '';
-      password.value = '';
       form.hidden = true;
       panel.hidden = false;
       panel.focus();
@@ -194,31 +241,45 @@ const t = getDictionary(Astro.locals.locale);
         return;
       }
 
-      const days = Number(expiry.value);
-      const body: { secret: string; expiresInDays: number; password?: string } = {
-        secret: secret.value,
-        expiresInDays: days,
-      };
-      if (password.value.length > 0) body.password = password.value;
+      const preset = expiry.value;
+      const suppliedPassword = password.value;
+      let keyFragment = '';
 
       submit.setAttribute('aria-busy', 'true');
       submit.disabled = true;
       submit.textContent = submitBusy;
 
       try {
+        // Sealed here, before anything leaves the browser: the key is generated
+        // per secret and never included in the request.
+        const key = generateContentKey();
+        const payload = await encryptPayload(secret.value, key);
+        keyFragment = encodeContentKey(key);
+
+        const body: { payload: string; expiresIn: string; password?: string } = {
+          payload,
+          expiresIn: preset,
+        };
+        if (suppliedPassword.length > 0) body.password = suppliedPassword;
+
         const response = await fetch('/api/secrets', {
           method: 'POST',
           credentials: 'same-origin',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify(body),
         });
-        const payload = (await response.json()) as CreateApiResponse;
+        const payloadBody = (await response.json()) as CreateApiResponse;
 
-        if (!response.ok || payload.ok !== true || typeof payload.url !== 'string') {
-          showError(null, typeof payload.message === 'string' ? payload.message : serverError);
+        if (
+          !response.ok ||
+          payloadBody.ok !== true ||
+          typeof payloadBody.url !== 'string' ||
+          typeof payloadBody.controlUrl !== 'string'
+        ) {
+          showError(null, typeof payloadBody.message === 'string' ? payloadBody.message : serverError);
           return;
         }
-        showResult(payload, days);
+        showResult(payloadBody, preset, keyFragment);
       } catch {
         showError(null, serverError);
       } finally {
@@ -228,29 +289,38 @@ const t = getDictionary(Astro.locals.locale);
       }
     });
 
-    copyButton.addEventListener('click', async () => {
-      const copied = await copyToClipboard(link.value);
-      window.clearTimeout(copyTimer);
-      if (copied) {
-        copyButton.textContent = copyDone;
-        resultStatus.textContent = copyDone;
-      } else {
-        copyButton.textContent = copyIdle;
-        resultStatus.textContent = copyFailed;
-      }
-      copyTimer = window.setTimeout(() => {
-        copyButton.textContent = copyIdle;
-        resultStatus.textContent = '';
-      }, COPY_RESET_DELAY);
-    });
+    for (const { field, button } of rows) {
+      button.addEventListener('click', async () => {
+        const copied = await copyToClipboard(field.value);
+        const previous = copyTimers.get(button);
+        if (previous !== undefined) window.clearTimeout(previous);
+
+        const idle = button.dataset.labelIdle ?? '';
+        const done = button.dataset.labelDone ?? '';
+        const failed = button.dataset.labelFailed ?? '';
+        button.textContent = copied ? done : idle;
+        resultStatus.textContent = copied ? done : failed;
+        copyTimers.set(
+          button,
+          window.setTimeout(() => {
+            button.textContent = idle;
+            if (resultStatus.textContent === done || resultStatus.textContent === failed) {
+              resultStatus.textContent = '';
+            }
+          }, COPY_RESET_DELAY),
+        );
+      });
+    }
 
     another.addEventListener('click', () => {
-      window.clearTimeout(copyTimer);
-      copyButton.textContent = copyIdle;
-      resultStatus.textContent = '';
+      resetCopyFeedback();
       panel.hidden = true;
       form.hidden = false;
       form.reset();
+      // The echo sits outside the form, so form.reset() does not reach it: the
+      // password must not survive in the DOM once the next secret is on screen.
+      passwordEcho.value = '';
+      passwordField.hidden = true;
       clearErrors();
       secret.focus();
     });

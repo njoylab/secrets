@@ -11,7 +11,8 @@ export const prerender = false;
 const locale = Astro.locals.locale;
 const t = getDictionary(locale);
 const token = Astro.params.token ?? '';
-// Rendering only checks presence: it never decrypts and never deletes.
+// Rendering only checks presence: it never decrypts and never deletes. The
+// content key lives in the fragment, which the browser never sends here.
 const presence = await peekSecretPresence(token);
 ---
 
@@ -32,6 +33,8 @@ const presence = await peekSecretPresence(token);
             novalidate
             data-token={token}
             data-error-server={t.errors.serverError}
+            data-error-missing-key={t.open.missingKey}
+            data-error-key-failed={t.open.keyFailed}
           >
             {presence.requiresPassword && (
               <PasswordField
@@ -77,6 +80,7 @@ const presence = await peekSecretPresence(token);
         <Notice
           id="secret-consumed"
           headingId="secret-consumed-title"
+          hintId="secret-consumed-hint"
           heading={t.secret.consumed}
           hint={t.secret.consumedHint}
           hidden
@@ -87,9 +91,11 @@ const presence = await peekSecretPresence(token);
 </Layout>
 
 <script>
+  import { decodeContentKey, decryptPayload } from '../../lib/content-crypto.ts';
+
   interface RevealApiResponse {
     ok?: boolean;
-    secret?: string;
+    payload?: string;
     error?: string;
     message?: string;
   }
@@ -138,6 +144,11 @@ const presence = await peekSecretPresence(token);
     }
   }
 
+  /** The key comes from the fragment, which the server has never seen. */
+  function contentKeyFromFragment(): Uint8Array | null {
+    return decodeContentKey(window.location.hash.replace(/^#/, ''));
+  }
+
   function initRevealFlow(): void {
     const form = byId<HTMLFormElement>('open-form');
     const status = byId<HTMLElement>('open-status');
@@ -148,6 +159,7 @@ const presence = await peekSecretPresence(token);
     const copyButton = byId<HTMLButtonElement>('secret-copy');
     const copyStatus = byId<HTMLElement>('secret-status');
     const consumed = byId<HTMLElement>('secret-consumed');
+    const consumedHint = byId<HTMLElement>('secret-consumed-hint');
 
     if (!form || !status || !submit || !secretPanel || !secretText || !copyButton || !copyStatus) {
       return;
@@ -156,6 +168,8 @@ const presence = await peekSecretPresence(token);
     // The token travels as a data attribute, never as an interpolated script string.
     const token = form.dataset.token ?? '';
     const serverError = form.dataset.errorServer ?? '';
+    const missingKey = form.dataset.errorMissingKey ?? '';
+    const keyFailed = form.dataset.errorKeyFailed ?? '';
     const revealIdle = submit.dataset.labelIdle ?? submit.textContent ?? '';
     const revealBusy = submit.dataset.labelBusy ?? revealIdle;
     const copyIdle = copyButton.dataset.labelIdle ?? '';
@@ -166,9 +180,15 @@ const presence = await peekSecretPresence(token);
     let revealed = false;
     let copyTimer = 0;
 
-    const showConsumed = (): void => {
+    /**
+     * The single dead end. `message` replaces the hint only when the reason is
+     * worth naming: a tampered key is a different failure from a spent link, even
+     * though both end with the payload already gone.
+     */
+    const showConsumed = (message?: string): void => {
       form.hidden = true;
       if (password) password.value = '';
+      if (message && consumedHint) consumedHint.textContent = message;
       if (!consumed) return;
       consumed.hidden = false;
       consumed.focus();
@@ -177,6 +197,14 @@ const presence = await peekSecretPresence(token);
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
       if (revealed) return;
+
+      // Without a usable key the POST cannot produce anything readable, and it
+      // would consume the secret to prove it. Refuse before spending it.
+      const key = contentKeyFromFragment();
+      if (!key) {
+        status.textContent = missingKey;
+        return;
+      }
 
       status.textContent = '';
       submit.setAttribute('aria-busy', 'true');
@@ -195,10 +223,19 @@ const presence = await peekSecretPresence(token);
         });
         const payload = (await response.json()) as RevealApiResponse;
 
-        if (response.ok && payload.ok === true && typeof payload.secret === 'string') {
+        if (response.ok && payload.ok === true && typeof payload.payload === 'string') {
           revealed = true;
+          // The row is already gone at this point: a failed tag means the key was
+          // altered in transit, and there is no second read to fall back on.
+          let plaintext: string;
+          try {
+            plaintext = await decryptPayload(payload.payload, key as any);
+          } catch {
+            showConsumed(keyFailed);
+            return;
+          }
           // textContent keeps the secret inert: markup is never interpreted.
-          secretText.textContent = payload.secret;
+          secretText.textContent = plaintext;
           form.hidden = true;
           if (password) password.value = '';
           secretPanel.hidden = false;

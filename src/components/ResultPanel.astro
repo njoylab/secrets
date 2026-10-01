@@ -17,7 +17,7 @@ const t = getDictionary(locale);
         readonly
         spellcheck="false"
         autocomplete="off"
-        aria-describedby="result-expiry"
+        aria-describedby="result-note"
       />
       <button
         type="button"
@@ -32,11 +32,62 @@ const t = getDictionary(locale);
     </div>
   </div>
 
+  <div class="field">
+    <label for="result-control-link">{t.result.controlLabel}</label>
+    <div class="copy-row">
+      <input
+        id="result-control-link"
+        class="input-mono"
+        type="text"
+        readonly
+        spellcheck="false"
+        autocomplete="off"
+      />
+      <button
+        type="button"
+        class="btn btn-ghost"
+        id="result-control-copy"
+        data-label-idle={t.result.copy}
+        data-label-done={t.result.copied}
+        data-label-failed={t.result.copyFailed}
+      >
+        {t.result.copy}
+      </button>
+    </div>
+  </div>
+
+  <!-- Only shown when a password was set: it leaves the form with the secret. -->
+  <div class="field" id="result-password-field" hidden>
+    <label for="result-password">{t.result.passwordLabel}</label>
+    <div class="copy-row">
+      <input
+        id="result-password"
+        class="input-mono"
+        type="text"
+        readonly
+        spellcheck="false"
+        autocomplete="off"
+      />
+      <button
+        type="button"
+        class="btn btn-ghost"
+        id="result-password-copy"
+        data-label-idle={t.result.copy}
+        data-label-done={t.result.copied}
+        data-label-failed={t.result.copyFailed}
+      >
+        {t.result.copy}
+      </button>
+    </div>
+  </div>
+
   <p class="meta" id="result-expiry">
     <span class="meta-label">{t.result.expires}</span>
+    <span id="result-expiry-preset"></span>
     <span id="result-expiry-value" data-locale={locale}></span>
-    <span class="suffix" id="result-expiry-days" data-label-days={t.result.days}></span>
   </p>
+
+  <p class="note" id="result-note">{t.result.noteKeyInFragment}</p>
 
   <p class="status" id="result-status" role="status" aria-live="polite"></p>
 

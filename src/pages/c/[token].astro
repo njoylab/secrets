@@ -1,0 +1,190 @@
+---
+import Panel from '../../components/Panel.astro';
+import Layout from '../../layouts/Layout.astro';
+import { getDictionary } from '../../lib/i18n.ts';
+import { readControlStatus } from '../../lib/secrets.ts';
+
+export const prerender = false;
+
+const locale = Astro.locals.locale;
+const t = getDictionary(locale);
+const token = Astro.params.token ?? '';
+// Rendering only reads the state: it never decrypts, never deletes and never
+// writes a receipt, so this page can be reloaded as often as wanted. An unknown
+// token and a receipt already purged both land on the single "unavailable" panel.
+const status = await readControlStatus(token);
+---
+
+<Layout title={t.control.title}>
+  <h1 class="page-title">{t.control.title}</h1>
+
+  {
+    status === null ? (
+      <Panel>
+        <p class="notice-message state-closed">{t.control.unavailable}</p>
+      </Panel>
+    ) : (
+      <Panel id="control-panel" heading={t.control.title} headingId="control-panel-title">
+        <div id="control-states" role="status" aria-live="polite">
+          <p class="notice-message" id="control-state-pending" hidden={status.state !== 'pending'}>
+            {t.control.pending}
+          </p>
+          <p class="notice-message state-closed" id="control-state-read" hidden={status.state !== 'read'}>
+            {t.control.read}
+          </p>
+          <p class="notice-message state-closed" id="control-state-expired" hidden={status.state !== 'expired'}>
+            {t.control.expired}
+          </p>
+          <p class="notice-message state-closed" id="control-state-cancelled" hidden={status.state !== 'cancelled'}>
+            {t.control.cancelled}
+          </p>
+          {/* Reachable only when a receipt is purged between the render and a cancel. */}
+          <p class="notice-message state-closed" id="control-state-unavailable" hidden>
+            {t.control.unavailable}
+          </p>
+        </div>
+
+        {status.expiresAt && (
+          <p class="meta">
+            <span class="meta-label">{t.control.expires}</span>
+            <span id="control-expiry" data-locale={locale}>
+              {status.expiresAt.toISOString()}
+            </span>
+          </p>
+        )}
+
+        <form
+          id="control-form"
+          class="form"
+          novalidate
+          data-token={token}
+          data-error-server={t.errors.serverError}
+          hidden={status.state !== 'pending'}
+        >
+          <p class="status" id="control-status" role="status"></p>
+          <button
+            type="submit"
+            class="btn btn-block"
+            id="control-cancel"
+            data-label-idle={t.control.cancel}
+            data-label-busy={t.control.cancelling}
+          >
+            {t.control.cancel}
+          </button>
+        </form>
+      </Panel>
+    )
+  }
+</Layout>
+
+<script>
+  interface CancelApiResponse {
+    ok?: boolean;
+    state?: string;
+    error?: string;
+    message?: string;
+  }
+
+  const STATES = ['pending', 'read', 'expired', 'cancelled'] as const;
+
+  type ControlState = (typeof STATES)[number];
+
+  /** The extra node is the dead end: unknown token, or a receipt already purged. */
+  const NODES = [...STATES, 'unavailable'] as const;
+
+  type ControlNode = (typeof NODES)[number];
+
+  function isControlState(value: unknown): value is ControlState {
+    return typeof value === 'string' && (STATES as readonly string[]).includes(value);
+  }
+
+  function byId<T extends HTMLElement>(id: string): T | null {
+    return document.getElementById(id) as T | null;
+  }
+
+  function formatInstant(value: string, locale: string): string {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    try {
+      return new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
+    } catch {
+      return value;
+    }
+  }
+
+  function initControlFlow(): void {
+    const form = byId<HTMLFormElement>('control-form');
+    if (!form) return;
+
+    const panel = byId<HTMLElement>('control-panel');
+    const status = byId<HTMLElement>('control-status');
+    const cancelButton = byId<HTMLButtonElement>('control-cancel');
+    const expiry = byId<HTMLElement>('control-expiry');
+    if (!panel || !cancelButton || !status) return;
+
+    // The token travels as a data attribute, never as an interpolated script string.
+    const token = form.dataset.token ?? '';
+    const serverError = form.dataset.errorServer ?? '';
+    const cancelIdle = cancelButton.dataset.labelIdle ?? '';
+    const cancelBusy = cancelButton.dataset.labelBusy ?? cancelIdle;
+
+    if (expiry) {
+      expiry.textContent = formatInstant(expiry.textContent ?? '', expiry.dataset.locale ?? 'en');
+    }
+
+    /**
+     * Repaint from a state alone. Every transition ends up here, including the
+     * ones the server decided: a cancel that lost a race reports the winning
+     * state instead of guessing at one.
+     */
+    const paint = (target: ControlNode): void => {
+      for (const node of NODES) {
+        const element = byId(`control-state-${node}`);
+        if (element) element.hidden = node !== target;
+      }
+      form.hidden = target !== 'pending';
+      if (target !== 'pending') panel.focus();
+    };
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (form.hidden) return;
+
+      status.textContent = '';
+      cancelButton.setAttribute('aria-busy', 'true');
+      cancelButton.disabled = true;
+      cancelButton.textContent = cancelBusy;
+
+      try {
+        const response = await fetch('/api/secrets/cancel', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ token }),
+        });
+        const payload = (await response.json()) as CancelApiResponse;
+
+        if (response.ok && payload.ok === true && isControlState(payload.state)) {
+          paint(payload.state);
+          return;
+        }
+
+        // A spent or purged control link answers exactly like an unknown one.
+        if (response.status === 404) {
+          paint('unavailable');
+          return;
+        }
+
+        status.textContent = typeof payload.message === 'string' ? payload.message : serverError;
+      } catch {
+        status.textContent = serverError;
+      } finally {
+        cancelButton.removeAttribute('aria-busy');
+        cancelButton.disabled = false;
+        cancelButton.textContent = cancelIdle;
+      }
+    });
+  }
+
+  initControlFlow();
+</script>

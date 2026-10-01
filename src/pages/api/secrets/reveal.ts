@@ -2,7 +2,9 @@
  * POST /api/secrets/reveal — consume a secret exactly once.
  *
  * A GET on this path never exists: revealing requires an explicit POST, so page
- * rendering, prefetching and crawlers cannot trigger a read.
+ * rendering, prefetching and crawlers cannot trigger a read. The response carries
+ * the sealed payload, not the text: the browser opens it with the key from the
+ * share link fragment, which never reached this process.
  */
 import type { APIRoute } from 'astro';
 import { errorResponse, jsonResponse } from '../../../lib/http.ts';
@@ -41,7 +43,7 @@ export const POST: APIRoute = async (context) => {
   }
 
   // Content is only serialized after the deleting statement has committed.
-  return jsonResponse({ ok: true, secret: result.secret }, { status: 200, locale });
+  return jsonResponse({ ok: true, payload: result.payload }, { status: 200, locale });
 };
 
 export const ALL: APIRoute = ({ locals }) => errorResponse(locals.locale, 'badRequest', 405);

@@ -7,6 +7,12 @@
 import { Buffer } from 'node:buffer';
 import { hashToken } from '../src/lib/crypto.ts';
 import { query } from '../src/lib/db.ts';
+import {
+  encodeContentKey,
+  encryptPayload,
+  generateContentKey,
+  type ContentBytes,
+} from '../src/lib/content-crypto.ts';
 import { SecretValidationError } from '../src/lib/secrets.ts';
 
 // Tests import the setup helper from here so they only need one fixture module.
@@ -14,10 +20,19 @@ export { resetEnv } from './setup.ts';
 
 export interface SecretRow {
   token_hash: string;
+  control_hash: string;
   ciphertext: string;
   password_hash: string | null;
   expires_at: Date;
   created_at: Date;
+}
+
+export interface ReceiptRow {
+  control_hash: string;
+  state: 'read' | 'expired' | 'cancelled';
+  expires_at: Date;
+  closed_at: Date;
+  purge_after: Date;
 }
 
 export interface RateLimitRow {
@@ -29,7 +44,7 @@ export interface RateLimitRow {
 
 export async function fetchSecretRow(token: string): Promise<SecretRow | undefined> {
   const { rows } = await query<SecretRow>(
-    `SELECT token_hash, ciphertext, password_hash, expires_at, created_at
+    `SELECT token_hash, control_hash, ciphertext, password_hash, expires_at, created_at
        FROM secrets
       WHERE token_hash = $1`,
     [hashToken(token)],
@@ -49,6 +64,46 @@ export async function secretRowJson(token: string): Promise<string> {
 export async function countSecrets(): Promise<number> {
   const { rows } = await query<{ count: string }>('SELECT count(*)::text AS count FROM secrets');
   return Number.parseInt(rows[0]?.count ?? '0', 10);
+}
+
+export async function fetchReceipt(controlToken: string): Promise<ReceiptRow | undefined> {
+  const { rows } = await query<ReceiptRow>(
+    `SELECT control_hash, state, expires_at, closed_at, purge_after
+       FROM secret_receipts
+      WHERE control_hash = $1`,
+    [hashToken(controlToken)],
+  );
+  return rows[0];
+}
+
+export async function fetchReceiptJson(controlToken: string): Promise<string> {
+  const { rows } = await query<{ json: string }>(
+    `SELECT row_to_json(r)::text AS json FROM secret_receipts r WHERE r.control_hash = $1`,
+    [hashToken(controlToken)],
+  );
+  return rows[0]?.json ?? '';
+}
+
+export async function countReceipts(): Promise<number> {
+  const { rows } = await query<{ count: string }>(
+    'SELECT count(*)::text AS count FROM secret_receipts',
+  );
+  return Number.parseInt(rows[0]?.count ?? '0', 10);
+}
+
+/** Move a receipt's purge date into the past, as the passage of time would. */
+export async function forceReceiptPurge(controlToken: string): Promise<void> {
+  await query(
+    `UPDATE secret_receipts
+        SET purge_after = now() - interval '1 minute'
+      WHERE control_hash = $1`,
+    [hashToken(controlToken)],
+  );
+}
+
+/** Remove a receipt outright, as a cleanup job that has caught up would. */
+export async function deleteReceipt(controlToken: string): Promise<void> {
+  await query('DELETE FROM secret_receipts WHERE control_hash = $1', [hashToken(controlToken)]);
 }
 
 export async function fetchRateLimitRows(
@@ -115,6 +170,30 @@ export function payloadOfBytes(byteLength: number): string {
 
 export function utf8(value: string): Buffer {
   return Buffer.from(value, 'utf8');
+}
+
+/** A payload that is valid to store but carries no readable text of its own. */
+export function fakePayload(secret: string): string {
+  return `not-really-sealed:${secret.length}:${Buffer.from(secret, 'utf8').toString('base64url')}`;
+}
+
+/**
+ * Seal a secret the way the browser does and hand back everything a test needs to
+ * act as the client: the opaque payload the server stores, the key, and the text
+ * form that travels in the link fragment.
+ */
+export async function sealedSecret(secret: string): Promise<{
+  payload: string;
+  key: ContentBytes;
+  keyText: string;
+}> {
+  const key = generateContentKey();
+  return { payload: await encryptPayload(secret, key), key, keyText: encodeContentKey(key) };
+}
+
+/** The share link a recipient receives, key included: it never leaves the browser. */
+export function shareLink(base: string, token: string, keyText: string): string {
+  return `${base}/s/${token}#${keyText}`;
 }
 
 /** Await a rejected `createSecret` and return the typed validation error. */
