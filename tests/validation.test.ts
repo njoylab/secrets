@@ -16,15 +16,20 @@ import {
   MAX_PAYLOAD_BYTES,
   MAX_REVEAL_BODY_BYTES,
   MAX_SECRET_BYTES,
+  MAX_VERIFIER_BYTES,
   RECEIPT_RETENTION_DAYS,
   createSecret,
   revealSecret,
   type ExpiryPreset,
 } from '../src/lib/secrets.ts';
-import { captureSecretError, fetchSecretRow, payloadOfBytes, resetEnv, sealedSecret } from './helpers.ts';
-
-/** Worst case for JSON: a control character expands to a six byte escape. */
-const ESCAPED_UNIT = '\u0001';
+import {
+  captureSecretError,
+  dummyVerifier,
+  fetchSecretRow,
+  payloadOfBytes,
+  resetEnv,
+  sealedSecret,
+} from './helpers.ts';
 
 function jsonPost(body: unknown, path = '/api/secrets'): Request {
   return new Request(`https://secrets.example.com${path}`, {
@@ -54,13 +59,18 @@ describe('payload size', () => {
     }
   });
 
-  it('accepts a payload of exactly MAX_PAYLOAD_BYTES', async () => {
-    const payload = 'a'.repeat(MAX_PAYLOAD_BYTES);
+  it('accepts a sealed payload of exactly MAX_PAYLOAD_BYTES', async () => {
+    const { payload } = await sealedSecret('a'.repeat(MAX_SECRET_BYTES));
     expect(Buffer.byteLength(payload, 'utf8')).toBe(MAX_PAYLOAD_BYTES);
 
     const created = await createSecret({ payload, expiresIn: '7d' });
     const result = await revealSecret(created.token);
     expect(result).toEqual({ ok: true, payload });
+  });
+
+  it('rejects a string that is not a sealed envelope', async () => {
+    const error = await captureSecretError(createSecret({ payload: 'payload', expiresIn: '7d' }));
+    expect(error.code).toBe('invalidPayload');
   });
 
   it('rejects a payload one byte over the limit', async () => {
@@ -108,18 +118,18 @@ describe('payload size', () => {
 
 describe('request body size', () => {
   it('accepts a body whose JSON escapes push it past the 64 KiB default', async () => {
-    // base64url never expands, so a full size payload plus a password full of
-    // control characters is the worst legitimate creation body.
+    // base64url never expands, so a full size payload plus a full size verifier
+    // is the worst legitimate creation body.
     const payload = 'a'.repeat(MAX_PAYLOAD_BYTES);
-    const password = ESCAPED_UNIT.repeat(MAX_PASSWORD_LENGTH);
-    const request = jsonPost({ payload, expiresIn: '7d', password });
+    const verifier = 'a'.repeat(MAX_VERIFIER_BYTES);
+    const request = jsonPost({ payload, expiresIn: '7d', verifier });
     expect(Buffer.byteLength(await request.clone().text(), 'utf8')).toBeGreaterThan(64 * 1024);
     expect(Buffer.byteLength(await request.clone().text(), 'utf8')).toBeLessThanOrEqual(MAX_CREATE_BODY_BYTES);
 
     const body = await readJsonBody(request, MAX_CREATE_BODY_BYTES);
     expect(body).not.toBeNull();
     expect(body?.payload).toBe(payload);
-    expect(body?.password).toBe(password);
+    expect(body?.verifier).toBe(verifier);
   });
 
   it('rejects a body one byte over the creation ceiling, before reading it', async () => {
@@ -188,8 +198,9 @@ describe('expiry presets', () => {
   ];
 
   it.each(invalid)('rejects an expiry of %s with invalidExpiry', async (_label, expiresIn) => {
+    const { payload } = await sealedSecret('expiry');
     const error = await captureSecretError(
-      createSecret({ payload: 'payload', expiresIn: expiresIn as ExpiryPreset }),
+      createSecret({ payload, expiresIn: expiresIn as ExpiryPreset }),
     );
     expect(error.code).toBe('invalidExpiry');
   });
@@ -197,7 +208,8 @@ describe('expiry presets', () => {
   it('accepts exactly the four presets, and nothing else', async () => {
     expect(EXPIRY_PRESETS).toEqual(['1h', '1d', '7d', '30d']);
     for (const preset of EXPIRY_PRESETS) {
-      const created = await createSecret({ payload: 'payload', expiresIn: preset });
+      const { payload } = await sealedSecret('preset');
+      const created = await createSecret({ payload, expiresIn: preset });
       const delta = created.expiresAt.getTime() - Date.now();
       expect(delta).toBeGreaterThan(EXPIRY_PRESET_SECONDS[preset] * 1000 - 10_000);
       expect(delta).toBeLessThan(EXPIRY_PRESET_SECONDS[preset] * 1000 + 10_000);
@@ -211,8 +223,9 @@ describe('expiry presets', () => {
   it('does not coerce a preset that merely looks like one', async () => {
     // The old API took days and accepted "7" as a string; a select cannot produce
     // that, and accepting it would make two spellings of the same request.
+    const { payload } = await sealedSecret('coerce');
     const error = await captureSecretError(
-      createSecret({ payload: 'payload', expiresIn: '7' as unknown as ExpiryPreset }),
+      createSecret({ payload, expiresIn: '7' as unknown as ExpiryPreset }),
     );
     expect(error.code).toBe('invalidExpiry');
   });
@@ -222,51 +235,31 @@ describe('expiry presets', () => {
   });
 });
 
-describe('password length', () => {
-  it('rejects a password longer than MAX_PASSWORD_LENGTH', async () => {
+describe('verifier', () => {
+  it('rejects a verifier that is not a sealed envelope', async () => {
+    const { payload } = await sealedSecret('verifier');
     const error = await captureSecretError(
-      createSecret({
-        payload: 'payload',
-        expiresIn: '7d',
-        password: 'p'.repeat(MAX_PASSWORD_LENGTH + 1),
-      }),
+      createSecret({ payload, expiresIn: '7d', verifier: 'not-an-envelope' }),
     );
-    expect(error.code).toBe('passwordTooLong');
+    expect(error.code).toBe('invalidVerifier');
   });
 
-  it('accepts a password of exactly MAX_PASSWORD_LENGTH', async () => {
-    const password = 'p'.repeat(MAX_PASSWORD_LENGTH);
-    const created = await createSecret({ payload: 'payload', expiresIn: '7d', password });
-    expect(await revealSecret(created.token, password)).toEqual({ ok: true, payload: 'payload' });
-  });
-
-  it('treats an empty password as no password at all', async () => {
-    const created = await createSecret({ payload: 'payload', expiresIn: '7d', password: '' });
+  it('treats an empty verifier as no password at all', async () => {
+    const { payload } = await sealedSecret('empty verifier');
+    const created = await createSecret({ payload, expiresIn: '7d', verifier: '' });
     const row = await fetchSecretRow(created.token);
     expect(row?.password_hash).toBeNull();
-    expect(await revealSecret(created.token)).toEqual({ ok: true, payload: 'payload' });
+    expect(row?.password_verifier).toBeNull();
+    expect(await revealSecret(created.token)).toEqual({ ok: true, payload });
   });
 
-  it('normalises the password to NFKC before hashing', async () => {
-    const created = await createSecret({
-      payload: 'payload',
-      expiresIn: '7d',
-      password: 'mot de passe e\u0301',
-    });
-    expect(await revealSecret(created.token, 'mot de passe \u00E9')).toEqual({
-      ok: true,
-      payload: 'payload',
-    });
-  });
-
-  it('rejects a non string password', async () => {
-    const error = await captureSecretError(
-      createSecret({
-        payload: 'payload',
-        expiresIn: '7d',
-        password: 1234 as unknown as string,
-      }),
-    );
-    expect(error.code).toBe('passwordTooLong');
+  it('stores a verifier and still reveals the original payload', async () => {
+    const { payload } = await sealedSecret('with verifier');
+    const verifier = await dummyVerifier();
+    const created = await createSecret({ payload, expiresIn: '7d', verifier });
+    const row = await fetchSecretRow(created.token);
+    expect(row?.password_hash).toBeNull();
+    expect(row?.password_verifier).toBeTruthy();
+    expect(await revealSecret(created.token)).toEqual({ ok: true, payload });
   });
 });

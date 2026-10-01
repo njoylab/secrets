@@ -18,6 +18,7 @@ import {
   countReceipts,
   countSecrets,
   deleteReceipt,
+  dummyVerifier,
   fetchRateLimitRows,
   fetchReceipt,
   fetchReceiptJson,
@@ -52,7 +53,7 @@ describe('purgeExpired: secrets', () => {
     const liveLocked = await createSecret({
       payload: (await sealedSecret('live locked')).payload,
       expiresIn: '7d',
-      password: 'pw-probe',
+      verifier: await dummyVerifier(),
     });
     await forceExpire(expiredShort.token);
     await setExpiresInSeconds(expiredLong.token, -1);
@@ -69,7 +70,7 @@ describe('purgeExpired: secrets', () => {
 
   it('leaves a live row byte for byte identical', async () => {
     const { payload } = await sealedSecret('untouched');
-    const live = await createSecret({ payload, expiresIn: '7d', password: 'pw-probe' });
+    const live = await createSecret({ payload, expiresIn: '7d', verifier: await dummyVerifier() });
     const before = await secretRowJson(live.token);
 
     expect(await purgeExpired(HOUR)).toEqual({ secrets: 0, receipts: 0, counters: 0 });
@@ -193,7 +194,7 @@ describe('purgeExpired: receipts', () => {
 
   it('never puts a payload, a password or a token in a receipt', async () => {
     const { payload } = await sealedSecret('receipt hygiene');
-    const created = await createSecret({ payload, expiresIn: '1d', password: 'pw-probe' });
+    const created = await createSecret({ payload, expiresIn: '1d', verifier: await dummyVerifier() });
     await forceExpire(created.token);
     await purgeExpired(HOUR);
 

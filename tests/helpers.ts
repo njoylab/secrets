@@ -5,12 +5,16 @@
  * execution order; nothing here returns secret content, passwords or tokens.
  */
 import { Buffer } from 'node:buffer';
-import { hashToken } from '../src/lib/crypto.ts';
+import { hashPassword, hashToken } from '../src/lib/crypto.ts';
 import { query } from '../src/lib/db.ts';
 import {
+  PASSWORD_VERIFIER_TEXT,
   encodeContentKey,
+  encodeShareFragment,
   encryptPayload,
   generateContentKey,
+  generatePasswordSalt,
+  derivePasswordKey,
   type ContentBytes,
 } from '../src/lib/content-crypto.ts';
 import { SecretValidationError } from '../src/lib/secrets.ts';
@@ -23,6 +27,7 @@ export interface SecretRow {
   control_hash: string;
   ciphertext: string;
   password_hash: string | null;
+  password_verifier: string | null;
   expires_at: Date;
   created_at: Date;
 }
@@ -44,7 +49,7 @@ export interface RateLimitRow {
 
 export async function fetchSecretRow(token: string): Promise<SecretRow | undefined> {
   const { rows } = await query<SecretRow>(
-    `SELECT token_hash, control_hash, ciphertext, password_hash, expires_at, created_at
+    `SELECT token_hash, control_hash, ciphertext, password_hash, password_verifier, expires_at, created_at
        FROM secrets
       WHERE token_hash = $1`,
     [hashToken(token)],
@@ -189,6 +194,45 @@ export async function sealedSecret(secret: string): Promise<{
 }> {
   const key = generateContentKey();
   return { payload: await encryptPayload(secret, key), key, keyText: encodeContentKey(key) };
+}
+
+/** A well formed verifier envelope. It does not bind a particular password. */
+export async function dummyVerifier(): Promise<string> {
+  return encryptPayload(PASSWORD_VERIFIER_TEXT, generateContentKey());
+}
+
+/**
+ * Seal a secret the way the password form does: the payload and the verifier
+ * share a key derived from the fragment key and the password.
+ */
+export async function sealedPasswordSecret(
+  secret: string,
+  password: string,
+): Promise<{
+  payload: string;
+  verifier: string;
+  key: ContentBytes;
+  salt: ContentBytes;
+  fragment: string;
+}> {
+  const key = generateContentKey();
+  const salt = generatePasswordSalt();
+  const derived = await derivePasswordKey(key, password, salt);
+  return {
+    payload: await encryptPayload(secret, derived),
+    verifier: await encryptPayload(PASSWORD_VERIFIER_TEXT, derived),
+    key,
+    salt,
+    fragment: encodeShareFragment(key, salt),
+  };
+}
+
+/** Attach a legacy scrypt hash to a row created without a client verifier. */
+export async function lockWithLegacyPassword(token: string, password: string): Promise<void> {
+  await query(`UPDATE secrets SET password_hash = $2 WHERE token_hash = $1`, [
+    hashToken(token),
+    await hashPassword(password),
+  ]);
 }
 
 /** The share link a recipient receives, key included: it never leaves the browser. */

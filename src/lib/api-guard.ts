@@ -19,10 +19,8 @@ export type GuardResult = { ok: true; context: RequestContext } | { ok: false; r
  * Reject cross-origin POSTs before any body is read, then rate limit by client IP.
  * Ordering matters: a cross-origin flood must not consume a subject's quota.
  *
- * Cancellations are charged against the reveal budget rather than a fourth set of
- * numbers: the endpoint takes a token and writes one row, which is exactly what a
- * reveal attempt does, and a separate quota would only make the limits easier to
- * reason about by making them wrong.
+ * Cancel uses the reveal rule, the same max and the same window, under its own
+ * bucket. The two counters are independent: spending one does not spend the other.
  */
 export async function guardRequest(
   request: Request,

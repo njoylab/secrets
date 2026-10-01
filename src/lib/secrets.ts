@@ -20,12 +20,16 @@ import {
   decryptSecret,
   encryptSecret,
   generateToken,
-  hashPassword,
   hashToken,
   isValidTokenShape,
   verifyPassword,
 } from './crypto.ts';
-import { CONTENT_NONCE_BYTES, CONTENT_TAG_BYTES } from './content-crypto.ts';
+import {
+  CONTENT_NONCE_BYTES,
+  CONTENT_TAG_BYTES,
+  PASSWORD_MAX_LENGTH,
+  isSealedEnvelope,
+} from './content-crypto.ts';
 
 /** Unpadded base64url length of `byteLength` bytes. */
 function base64UrlLength(byteLength: number): number {
@@ -46,7 +50,17 @@ export const MAX_SECRET_BYTES = 50 * 1024;
  */
 export const MAX_PAYLOAD_BYTES = base64UrlLength(MAX_SECRET_BYTES + CONTENT_NONCE_BYTES + CONTENT_TAG_BYTES);
 
-export const MAX_PASSWORD_LENGTH = 512;
+export const MAX_PASSWORD_LENGTH = PASSWORD_MAX_LENGTH;
+
+/**
+ * Largest sealed verifier the browser may store.
+ *
+ * The verifier plaintext is a short constant. The ceiling leaves room for that
+ * envelope and refuses a second copy of the secret smuggled in this field.
+ */
+const MAX_VERIFIER_PLAINTEXT_BYTES = 128;
+const MAX_VERIFIER_DECODED = CONTENT_NONCE_BYTES + CONTENT_TAG_BYTES + MAX_VERIFIER_PLAINTEXT_BYTES;
+export const MAX_VERIFIER_BYTES = base64UrlLength(MAX_VERIFIER_DECODED);
 
 /** How long a receipt is kept after the secret closed. */
 export const RECEIPT_RETENTION_DAYS = 7;
@@ -78,9 +92,13 @@ const JSON_ESCAPE_FACTOR = 6;
 /** Room for the field names, punctuation, the expiry preset and any slack. */
 const JSON_ENVELOPE_BYTES = 256;
 
-/** Body ceiling for `POST /api/secrets`: a full size payload plus a full size password. */
-export const MAX_CREATE_BODY_BYTES =
-  MAX_PAYLOAD_BYTES + MAX_PASSWORD_LENGTH * JSON_ESCAPE_FACTOR + JSON_ENVELOPE_BYTES;
+/**
+ * Body ceiling for `POST /api/secrets`: a full size payload plus a verifier.
+ *
+ * The password is not part of this body. It stays in the browser and is mixed
+ * into the content key there.
+ */
+export const MAX_CREATE_BODY_BYTES = MAX_PAYLOAD_BYTES + MAX_VERIFIER_BYTES + JSON_ENVELOPE_BYTES;
 
 /**
  * Body ceiling for `POST /api/secrets/reveal`: a token and a password, never the
@@ -93,11 +111,15 @@ export const MAX_REVEAL_BODY_BYTES =
 /** Body ceiling for `POST /api/secrets/cancel`: one control token and nothing else. */
 export const MAX_CANCEL_BODY_BYTES = TOKEN_LENGTH * JSON_ESCAPE_FACTOR + JSON_ENVELOPE_BYTES;
 
+/** Body ceiling for `POST /api/secrets/verifier`: one share token and nothing else. */
+export const MAX_VERIFIER_BODY_BYTES = TOKEN_LENGTH * JSON_ESCAPE_FACTOR + JSON_ENVELOPE_BYTES;
+
 export type SecretErrorCode =
   | 'payloadRequired'
   | 'payloadTooLong'
-  | 'invalidExpiry'
-  | 'passwordTooLong';
+  | 'invalidPayload'
+  | 'invalidVerifier'
+  | 'invalidExpiry';
 
 export class SecretValidationError extends Error {
   constructor(
@@ -113,7 +135,12 @@ export interface CreateSecretInput {
   /** Sealed secret text, produced by the browser. Never decrypted here. */
   readonly payload: string;
   readonly expiresIn: ExpiryPreset;
-  readonly password?: string;
+  /**
+   * Sealed password check, produced by the browser under the same key as the
+   * payload. Absent when the secret has no password. The password itself is
+   * never a field of this input.
+   */
+  readonly verifier?: string;
 }
 
 export interface CreatedSecret {
@@ -121,6 +148,8 @@ export interface CreatedSecret {
   readonly controlToken: string;
   readonly expiresAt: Date;
 }
+
+export type PasswordMode = 'none' | 'client' | 'server';
 
 export type RevealFailure = 'unavailable' | 'bad_password' | 'undecryptable';
 
@@ -143,6 +172,7 @@ export type CancelResult =
 interface SecretRow {
   ciphertext: string;
   password_hash: string | null;
+  password_verifier: string | null;
 }
 
 interface ConsumedRow {
@@ -182,6 +212,23 @@ function validatePayload(raw: unknown): string {
       `Payload is ${byteLength} bytes, limit is ${MAX_PAYLOAD_BYTES}`,
     );
   }
+  const maxDecoded = MAX_SECRET_BYTES + CONTENT_NONCE_BYTES + CONTENT_TAG_BYTES;
+  if (!isSealedEnvelope(raw, maxDecoded)) {
+    throw new SecretValidationError('invalidPayload', 'Payload is not a sealed envelope');
+  }
+  return raw;
+}
+
+/** A browser verifier, or `undefined` when the secret has no password. */
+function validateVerifier(raw: unknown): string | undefined {
+  if (raw === undefined || raw === null || raw === '') return undefined;
+  if (typeof raw !== 'string') {
+    throw new SecretValidationError('invalidVerifier', 'Verifier must be a string');
+  }
+  const byteLength = Buffer.byteLength(raw, 'utf8');
+  if (byteLength > MAX_VERIFIER_BYTES || !isSealedEnvelope(raw, MAX_VERIFIER_DECODED)) {
+    throw new SecretValidationError('invalidVerifier', 'Verifier is not a sealed envelope');
+  }
   return raw;
 }
 
@@ -196,25 +243,10 @@ function validateExpiryPreset(raw: unknown): ExpiryPreset {
   return raw as ExpiryPreset;
 }
 
-function validatePassword(raw: unknown): string | undefined {
-  if (raw === undefined || raw === null || raw === '') return undefined;
-  if (typeof raw !== 'string') {
-    throw new SecretValidationError('passwordTooLong', 'Password must be a string');
-  }
-  const password = raw.normalize('NFKC');
-  if (password.length > MAX_PASSWORD_LENGTH) {
-    throw new SecretValidationError(
-      'passwordTooLong',
-      `Password is ${password.length} characters, limit is ${MAX_PASSWORD_LENGTH}`,
-    );
-  }
-  return password;
-}
-
 export async function createSecret(input: CreateSecretInput): Promise<CreatedSecret> {
   const payload = validatePayload(input.payload);
   const expiresIn = validateExpiryPreset(input.expiresIn);
-  const password = validatePassword(input.password);
+  const verifier = validateVerifier(input.verifier);
 
   const token = generateToken();
   const controlToken = generateToken();
@@ -222,15 +254,17 @@ export async function createSecret(input: CreateSecretInput): Promise<CreatedSec
   const controlHash = hashToken(controlToken);
   // The payload is opaque here: the inner key never reaches the server, so this
   // layer protects the stored value without ever being able to open it.
-  const ciphertext = encryptSecret(payload, getConfig().encryptionKey);
-  // Hash the password before touching the database: no lock is held during scrypt.
-  const passwordHash = password === undefined ? null : await hashPassword(password);
+  const key = getConfig().encryptionKey;
+  const ciphertext = encryptSecret(payload, key);
+  // The verifier is the same kind of opaque envelope. Wrapping it keeps a
+  // database dump from using it as an offline password oracle on its own.
+  const verifierCiphertext = verifier === undefined ? null : encryptSecret(verifier, key);
 
   const { rows } = await query<{ expires_at: Date }>(
-    `INSERT INTO secrets (token_hash, control_hash, ciphertext, password_hash, expires_at)
-     VALUES ($1, $2, $3, $4, now() + make_interval(secs => $5::double precision))
+    `INSERT INTO secrets (token_hash, control_hash, ciphertext, password_hash, password_verifier, expires_at)
+     VALUES ($1, $2, $3, NULL, $4, now() + make_interval(secs => $5::double precision))
      RETURNING expires_at`,
-    [tokenHash, controlHash, ciphertext, passwordHash, EXPIRY_PRESET_SECONDS[expiresIn]],
+    [tokenHash, controlHash, ciphertext, verifierCiphertext, EXPIRY_PRESET_SECONDS[expiresIn]],
   );
 
   const expiresAt = rows[0]?.expires_at;
@@ -238,10 +272,15 @@ export async function createSecret(input: CreateSecretInput): Promise<CreatedSec
   return { token, controlToken, expiresAt: new Date(expiresAt) };
 }
 
-export async function peekSecretPresence(token: string): Promise<{ requiresPassword: boolean } | null> {
+export async function peekSecretPresence(token: string): Promise<{ password: PasswordMode } | null> {
   if (!isValidTokenShape(token)) return null;
-  const { rows } = await query<{ password_hash: string | null; is_expired: boolean }>(
+  const { rows } = await query<{
+    password_hash: string | null;
+    password_verifier: string | null;
+    is_expired: boolean;
+  }>(
     `SELECT password_hash,
+            password_verifier,
             expires_at <= now() AS is_expired
        FROM secrets
       WHERE token_hash = $1`,
@@ -249,7 +288,41 @@ export async function peekSecretPresence(token: string): Promise<{ requiresPassw
   );
   const row = rows[0];
   if (!row || row.is_expired) return null;
-  return { requiresPassword: row.password_hash !== null };
+  // A verifier means the password was mixed into the content key in the browser.
+  // A hash without a verifier is a row created before that change: the server
+  // still checks scrypt, and the content key is the fragment alone.
+  if (row.password_verifier !== null) return { password: 'client' };
+  if (row.password_hash !== null) return { password: 'server' };
+  return { password: 'none' };
+}
+
+export type VerifierRead =
+  | { readonly ok: true; readonly verifier: string }
+  | { readonly ok: false; readonly reason: 'unavailable' | 'undecryptable' };
+
+/**
+ * Return the password verifier without deleting the secret.
+ *
+ * The browser decrypts this blob with the password-derived key before it asks
+ * to reveal. A wrong password stops there, so the row stays. The blob is not
+ * the secret: revealing still requires the deleting statement.
+ */
+export async function readPasswordVerifier(token: string): Promise<VerifierRead> {
+  if (!isValidTokenShape(token)) return { ok: false, reason: 'unavailable' };
+  const { rows } = await query<{ password_verifier: string | null }>(
+    `SELECT password_verifier
+       FROM secrets
+      WHERE token_hash = $1
+        AND expires_at > now()`,
+    [hashToken(token)],
+  );
+  const stored = rows[0]?.password_verifier;
+  if (!stored) return { ok: false, reason: 'unavailable' };
+  try {
+    return { ok: true, verifier: decryptSecret(stored, getConfig().encryptionKey) };
+  } catch {
+    return { ok: false, reason: 'undecryptable' };
+  }
 }
 
 /**
@@ -357,7 +430,7 @@ export async function revealSecret(token: string, password?: string): Promise<Re
   const tokenHash = hashToken(token);
 
   const { rows: candidates } = await query<SecretRow>(
-    `SELECT ciphertext, password_hash
+    `SELECT ciphertext, password_hash, password_verifier
        FROM secrets
       WHERE token_hash = $1
         AND expires_at > now()`,
@@ -366,7 +439,13 @@ export async function revealSecret(token: string, password?: string): Promise<Re
   const candidate = candidates[0];
   if (!candidate) return { ok: false, reason: 'unavailable' };
 
-  if (candidate.password_hash !== null) {
+  // Client-side passwords are checked against the verifier before this call.
+  // The server never learns the password, so it cannot refuse the reveal: a
+  // caller that skips the check obtains ciphertext it still cannot open
+  // without the fragment key and the password, and it does consume the row.
+  // Legacy rows store only a scrypt hash. Those still refuse a wrong password
+  // here, and a wrong password does not reach the delete.
+  if (candidate.password_verifier === null && candidate.password_hash !== null) {
     const supplied = password ?? '';
     if (!(await verifyPassword(supplied, candidate.password_hash))) {
       return { ok: false, reason: 'bad_password' };

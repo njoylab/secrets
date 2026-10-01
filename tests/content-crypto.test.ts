@@ -11,13 +11,22 @@ import {
   CONTENT_KEY_LENGTH,
   CONTENT_NONCE_BYTES,
   CONTENT_TAG_BYTES,
+  PASSWORD_KDF_ITERATIONS,
+  PASSWORD_MAX_LENGTH,
+  PASSWORD_VERIFIER_TEXT,
   decodeBase64Url,
   decodeContentKey,
+  decodeShareFragment,
   encodeBase64Url,
   encodeContentKey,
+  encodeShareFragment,
   encryptPayload,
   generateContentKey,
+  generatePasswordSalt,
+  derivePasswordKey,
   decryptPayload,
+  isSealedEnvelope,
+  shareUrl,
 } from '../src/lib/content-crypto.ts';
 
 const SECRET = 'the quick brown fox';
@@ -255,10 +264,78 @@ describe('payload opening', () => {
     }
   });
 
+  it('recognises a sealed envelope and refuses raw text', async () => {
+    const key = generateContentKey();
+    const sealed = await encryptPayload('hello', key);
+    expect(isSealedEnvelope(sealed, 1024)).toBe(true);
+    expect(isSealedEnvelope('hello', 1024)).toBe(false);
+    expect(isSealedEnvelope(sealed, 10)).toBe(false);
+  });
+
   it('accepts the empty string as a valid, empty secret', async () => {
     // The form refuses an empty secret, but a payload that decrypts to nothing is
     // still a payload: refusing here would be a second, different validation rule.
     const key = generateContentKey();
     expect(await decryptPayload(await encryptPayload('', key), key)).toBe('');
+  });
+});
+
+describe('share links', () => {
+  const token = encodeContentKey(generateContentKey());
+
+  it('builds the share URL from the page origin and a well formed token', () => {
+    expect(shareUrl('https://secrets.example/anything', token)).toBe(`https://secrets.example/s/${token}`);
+    expect(shareUrl('http://127.0.0.1:4321/create', token)).toBe(`http://127.0.0.1:4321/s/${token}`);
+  });
+
+  it('refuses a token or an origin that cannot carry the key', () => {
+    expect(shareUrl('https://secrets.example', 'short')).toBeNull();
+    expect(shareUrl('https://secrets.example', `${token}x`)).toBeNull();
+    expect(shareUrl('not a url', token)).toBeNull();
+    expect(shareUrl('javascript:alert(1)', token)).toBeNull();
+  });
+
+  it('round-trips a fragment that also carries a password salt', () => {
+    const key = generateContentKey();
+    const salt = generatePasswordSalt();
+    const text = encodeShareFragment(key, salt);
+    expect(text.startsWith(`${encodeContentKey(key)}.`)).toBe(true);
+    expect(decodeShareFragment(text)).toEqual({ key, salt });
+    expect(decodeShareFragment(encodeShareFragment(key))).toEqual({ key, salt: null });
+    expect(decodeShareFragment(`${text}.extra`)).toBeNull();
+    expect(decodeShareFragment(`${encodeContentKey(key)}.short`)).toBeNull();
+  });
+});
+
+describe('password-derived content key', () => {
+  it('uses the OWASP PBKDF2 iteration floor', () => {
+    expect(PASSWORD_KDF_ITERATIONS).toBeGreaterThanOrEqual(600_000);
+    expect(PASSWORD_MAX_LENGTH).toBe(512);
+  });
+
+  it('rejects an empty or oversized password before deriving', async () => {
+    const key = generateContentKey();
+    const salt = generatePasswordSalt();
+    await expect(derivePasswordKey(key, '', salt)).rejects.toThrow();
+    await expect(derivePasswordKey(key, 'p'.repeat(PASSWORD_MAX_LENGTH + 1), salt)).rejects.toThrow();
+  });
+
+  it('requires both the fragment key and the password', async () => {
+    const key = generateContentKey();
+    const salt = generatePasswordSalt();
+    const derived = await derivePasswordKey(key, 'correct horse', salt);
+    const payload = await encryptPayload('sealed', derived);
+    const verifier = await encryptPayload(PASSWORD_VERIFIER_TEXT, derived);
+
+    expect(await decryptPayload(payload, derived)).toBe('sealed');
+    expect(await decryptPayload(verifier, derived)).toBe(PASSWORD_VERIFIER_TEXT);
+    await expect(decryptPayload(payload, key)).rejects.toThrow();
+
+    const other = await derivePasswordKey(key, 'wrong horse', salt);
+    await expect(decryptPayload(verifier, other)).rejects.toThrow();
+
+    const equivalent = await derivePasswordKey(key, 'e\u0301', salt);
+    const composed = await derivePasswordKey(key, '\u00E9', salt);
+    expect(equivalent).toEqual(composed);
   });
 });

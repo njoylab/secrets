@@ -161,8 +161,11 @@ describe('dictionaries', () => {
     const errorKeys: ReadonlyArray<keyof Dictionary['errors']> = [
       'payloadRequired',
       'payloadTooLong',
+      'invalidPayload',
+      'invalidVerifier',
       'invalidExpiry',
       'passwordTooLong',
+      'passwordRejected',
       'badPassword',
       'unavailable',
       'rateLimited',
@@ -219,7 +222,7 @@ describe('wording required by PIANO_SVILUPPO.md', () => {
     expect(itPaths.sort()).toEqual(enPaths.sort());
   });
 
-  it('pins the two permitted notes verbatim', () => {
+  it('pins the permitted notes verbatim', () => {
     const it = getDictionary('it');
     const en = getDictionary('en');
     expect(it.create.notePassword).toBe('Invia la password separatamente');
@@ -229,6 +232,8 @@ describe('wording required by PIANO_SVILUPPO.md', () => {
     // The same two notes, reused on the opening screen.
     expect(it.open.noteSingleRead).toBe('Una sola lettura. Nessun recupero');
     expect(en.open.noteSingleRead).toBe('One read only. No recovery');
+    expect(it.result.noteKeyInFragment).toBe('La chiave è nel link, dopo #');
+    expect(en.result.noteKeyInFragment).toBe('The key is in the link, after #');
   });
 
   it('keeps the expiry labels paired by key, not by repeated text', () => {

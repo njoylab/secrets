@@ -25,6 +25,29 @@ export const CONTENT_TAG_BYTES = 16;
 /** base64url text length of a fragment key: 32 bytes encode to exactly 43 characters. */
 export const CONTENT_KEY_LENGTH = 43;
 
+/**
+ * Share-token shape. Mirrors `TOKEN_LENGTH` in `crypto.ts` without importing it:
+ * that module is Node-only, and this one also runs in the browser.
+ */
+export const SHARE_TOKEN_LENGTH = 43;
+
+/** Random salt mixed into a password-derived content key. 16 bytes encode to 22 characters. */
+export const PASSWORD_SALT_BYTES = 16;
+export const PASSWORD_SALT_LENGTH = 22;
+
+/** Client-side password KDF. Web Crypto has PBKDF2, not scrypt. */
+export const PASSWORD_KDF_ITERATIONS = 600_000;
+export const PASSWORD_MAX_LENGTH = 512;
+
+/**
+ * Plaintext sealed under the password-derived key and stored so a wrong
+ * password can be rejected before the secret itself is deleted.
+ */
+export const PASSWORD_VERIFIER_TEXT = 'echovalue-secrets-verifier-v1';
+
+const PASSWORD_HKDF_INFO = new TextEncoder().encode('echovalue-secrets-v1');
+const SHARE_TOKEN_SHAPE = new RegExp(`^[A-Za-z0-9_-]{${SHARE_TOKEN_LENGTH}}$`);
+
 const BASE64URL_SHAPE = /^[A-Za-z0-9_-]*$/;
 
 /** Chunked so a 50 KiB payload never lands in a single spread argument list. */
@@ -94,6 +117,128 @@ export function decodeContentKey(text: string | null | undefined): ContentBytes 
   const key = decodeBase64Url(text);
   if (!key || key.byteLength !== CONTENT_KEY_BYTES) return null;
   return key;
+}
+
+export interface ShareFragment {
+  readonly key: ContentBytes;
+  readonly salt: ContentBytes | null;
+}
+
+/** A fresh 16 byte salt for the password KDF. */
+export function generatePasswordSalt(): ContentBytes {
+  const salt = new Uint8Array(PASSWORD_SALT_BYTES);
+  crypto.getRandomValues(salt);
+  return salt;
+}
+
+/**
+ * Fragment text. Without a password it is the key alone. With a password the
+ * salt follows a `.`, which is outside the base64url alphabet, so the two
+ * parts cannot be confused.
+ */
+export function encodeShareFragment(key: Uint8Array, salt?: Uint8Array | null): string {
+  const keyText = encodeContentKey(key);
+  if (!salt) return keyText;
+  return `${keyText}.${encodeBase64Url(salt)}`;
+}
+
+/**
+ * Parse a fragment, or return `null` when the key or the salt is not canonical.
+ *
+ * One dot separates the key from the salt. A second dot, a short salt or a
+ * non-canonical character fails closed: the caller must not reveal.
+ */
+export function decodeShareFragment(text: string | null | undefined): ShareFragment | null {
+  if (typeof text !== 'string' || text.length === 0) return null;
+  const dot = text.indexOf('.');
+  if (dot === -1) {
+    const key = decodeContentKey(text);
+    return key ? { key, salt: null } : null;
+  }
+  if (text.indexOf('.', dot + 1) !== -1) return null;
+  const saltText = text.slice(dot + 1);
+  if (saltText.length !== PASSWORD_SALT_LENGTH) return null;
+  const key = decodeContentKey(text.slice(0, dot));
+  const salt = decodeBase64Url(saltText);
+  if (!key || !salt || salt.byteLength !== PASSWORD_SALT_BYTES) return null;
+  return { key, salt };
+}
+
+/**
+ * Same-origin share URL. The content key is appended by the caller and must
+ * never be attached to an origin the page itself was not loaded from.
+ */
+export function shareUrl(pageOrigin: string, token: string): string | null {
+  if (!SHARE_TOKEN_SHAPE.test(token)) return null;
+  let url: URL;
+  try {
+    url = new URL(pageOrigin);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
+  return `${url.origin}/s/${token}`;
+}
+
+/**
+ * Content key that requires both the fragment key and the password.
+ *
+ * PBKDF2-HMAC-SHA256 produces a KEK, and HKDF mixes that KEK with the fragment
+ * key. Either input alone is not enough to open the payload. The password is
+ * normalised to NFKC and never leaves this function.
+ */
+export async function derivePasswordKey(
+  fragmentKey: ContentBytes,
+  password: string,
+  salt: ContentBytes,
+): Promise<ContentBytes> {
+  const normalized = password.normalize('NFKC');
+  if (normalized.length === 0 || normalized.length > PASSWORD_MAX_LENGTH) {
+    throw new Error('Password is empty or too long');
+  }
+  if (fragmentKey.byteLength !== CONTENT_KEY_BYTES || salt.byteLength !== PASSWORD_SALT_BYTES) {
+    throw new Error('Password key material is the wrong size');
+  }
+
+  const material = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(normalized),
+    'PBKDF2',
+    false,
+    ['deriveBits'],
+  );
+  const kek = new Uint8Array(
+    await crypto.subtle.deriveBits(
+      { name: 'PBKDF2', hash: 'SHA-256', salt, iterations: PASSWORD_KDF_ITERATIONS },
+      material,
+      256,
+    ),
+  );
+  const base = await crypto.subtle.importKey('raw', fragmentKey, 'HKDF', false, ['deriveBits']);
+  const derived = new Uint8Array(
+    await crypto.subtle.deriveBits(
+      { name: 'HKDF', hash: 'SHA-256', salt: kek, info: PASSWORD_HKDF_INFO },
+      base,
+      256,
+    ),
+  );
+  if (derived.byteLength !== CONTENT_KEY_BYTES) {
+    throw new Error('Derived content key is the wrong size');
+  }
+  return derived;
+}
+
+/**
+ * True when `text` is a canonical sealed envelope of at most `maxDecoded` bytes.
+ *
+ * The server cannot check the GCM tag: it does not have the content key. It can
+ * refuse strings that are not the envelope the browser produces, so a raw secret
+ * is not stored under the deployment key alone.
+ */
+export function isSealedEnvelope(text: string, maxDecoded: number): boolean {
+  const raw = decodeBase64Url(text);
+  if (!raw) return false;
+  return raw.byteLength >= CONTENT_NONCE_BYTES + CONTENT_TAG_BYTES && raw.byteLength <= maxDecoded;
 }
 
 async function importContentKey(key: ContentBytes, usage: KeyUsage): Promise<CryptoKey> {

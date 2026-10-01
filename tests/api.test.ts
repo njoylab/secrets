@@ -4,14 +4,15 @@
  * These tests drive the exported route handlers, so they cover the wire contract:
  * which fields the body must carry, which fields the reply must not, and the
  * status code each failure maps to. They also prove the two invariants that only
- * exist at this layer: a reveal is a POST, and a cancel is charged against the
- * reveal budget rather than a fourth one.
+ * exist at this layer: a reveal is a POST, and a cancel is limited by the reveal
+ * rule in its own bucket.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { APIContext, APIRoute } from 'astro';
 import { POST as createEndpoint, ALL as createAll } from '../src/pages/api/secrets/index.ts';
 import { POST as revealEndpoint } from '../src/pages/api/secrets/reveal.ts';
 import { POST as cancelEndpoint } from '../src/pages/api/secrets/cancel.ts';
+import { POST as verifierEndpoint } from '../src/pages/api/secrets/verifier.ts';
 import { CANCEL_BUCKET, REVEAL_BUCKET } from '../src/lib/rate-limit.ts';
 import { MAX_PAYLOAD_BYTES } from '../src/lib/secrets.ts';
 import {
@@ -20,6 +21,7 @@ import {
   countSecrets,
   fetchRateLimitRows,
   resetEnv,
+  dummyVerifier,
   sealedSecret,
   shareLink,
 } from './helpers.ts';
@@ -63,19 +65,21 @@ async function call(handler: APIRoute, path: string, body: unknown, ip = CLIENT_
 const create = (body: unknown, ip?: string) => call(createEndpoint, '/api/secrets', body, ip);
 const reveal = (body: unknown, ip?: string) => call(revealEndpoint, '/api/secrets/reveal', body, ip);
 const cancel = (body: unknown, ip?: string) => call(cancelEndpoint, '/api/secrets/cancel', body, ip);
+const verifier = (body: unknown, ip?: string) => call(verifierEndpoint, '/api/secrets/verifier', body, ip);
 
 beforeEach(async () => {
   await resetEnv();
 });
 
 describe('POST /api/secrets', () => {
-  it('accepts a payload, an expiry preset and a password, and returns two links', async () => {
+  it('accepts a payload, an expiry preset and a verifier, and returns two links', async () => {
     const { payload } = await sealedSecret('wire contract');
-    const reply = await create({ payload, expiresIn: '1h', password: 'pw-probe' });
+    const reply = await create({ payload, expiresIn: '1h', verifier: await dummyVerifier() });
 
     expect(reply.status).toBe(201);
     expect(reply.body.ok).toBe(true);
     expect(reply.body.requiresPassword).toBe(true);
+    expect(reply.text).not.toContain('pw-probe');
     expect(reply.body.url).toBe(`${ORIGIN}/s/${String(reply.body.token)}`);
     expect(String(reply.body.controlUrl)).toMatch(new RegExp(`^${ORIGIN}/c/[A-Za-z0-9_-]{43}$`));
     expect(reply.body.expiresAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
@@ -164,13 +168,29 @@ describe('POST /api/secrets/reveal', () => {
     expect(second.body.error).toBe('unavailable');
   });
 
-  it('answers 403 for a wrong password without consuming the secret', async () => {
+  it('refuses a password field and stores nothing', async () => {
+    const { payload } = await sealedSecret('no server password');
+    const reply = await create({ payload, expiresIn: '7d', password: 'pw-probe' });
+
+    expect(reply.status).toBe(422);
+    expect(reply.body.error).toBe('passwordRejected');
+    expect(reply.text).not.toContain('pw-probe');
+    expect(await countSecrets()).toBe(0);
+  });
+
+  it('returns the verifier without consuming, then reveal still returns the payload once', async () => {
     const { payload } = await sealedSecret('locked');
-    const created = await create({ payload, expiresIn: '7d', password: 'pw-probe' });
+    const check = await dummyVerifier();
+    const created = await create({ payload, expiresIn: '7d', verifier: check });
     const token = String(created.body.token);
 
-    expect((await reveal({ token, password: 'wrong' })).status).toBe(403);
-    expect((await reveal({ token, password: 'pw-probe' })).body.payload).toBe(payload);
+    const first = await verifier({ token });
+    expect(first.status).toBe(200);
+    expect(first.body.verifier).toBe(check);
+    expect(await countSecrets()).toBe(1);
+
+    expect((await reveal({ token })).body.payload).toBe(payload);
+    expect((await verifier({ token })).status).toBe(404);
   });
 
   it('answers 404, not 403, for a token that does not exist', async () => {
@@ -240,9 +260,9 @@ describe('POST /api/secrets/cancel', () => {
     }
   });
 
-  it('shares the reveal budget, in its own bucket', async () => {
-    // The suite allows five reveals per window. A cancel must not have a budget
-    // of its own, or an attacker could spend five cancels and five reveals.
+  it('limits cancel with the reveal rule, in its own bucket', async () => {
+    // The suite allows five reveals per window. Cancel gets the same five in a
+    // separate counter, so these attempts do not touch the reveal bucket.
     const { payload } = await sealedSecret('budget');
     const created = await create({ payload, expiresIn: '7d' });
     const controlToken = String(created.body.controlUrl).split('/c/')[1] ?? '';
@@ -255,7 +275,7 @@ describe('POST /api/secrets/cancel', () => {
     expect(statuses.slice(0, 5)).toEqual([200, 200, 200, 200, 200]);
     expect(statuses.slice(5)).toEqual([429, 429]);
 
-    // The refusals are charged to the cancel bucket, which shares the reveal rule.
+    // The refusals land in the cancel bucket. The reveal bucket stays empty.
     expect(await fetchRateLimitRows(CANCEL_BUCKET, CLIENT_IP)).toHaveLength(1);
     expect(await fetchRateLimitRows(REVEAL_BUCKET, CLIENT_IP)).toHaveLength(0);
   });
@@ -282,10 +302,10 @@ describe('POST /api/secrets/cancel', () => {
 describe('the two links, end to end', () => {
   it('keeps the content key out of every response the server sends', async () => {
     const { payload, keyText } = await sealedSecret('end to end');
-    const created = await create({ payload, expiresIn: '1d', password: 'pw-probe' });
+    const created = await create({ payload, expiresIn: '1d', verifier: await dummyVerifier() });
     const controlToken = String(created.body.controlUrl).split('/c/')[1] ?? '';
 
-    const statuses = [await reveal({ token: String(created.body.token), password: 'pw-probe' })];
+    const statuses = [await reveal({ token: String(created.body.token) })];
     expect(statuses[0]?.body.payload).toBe(payload);
 
     const link = shareLink(ORIGIN, String(created.body.token), keyText);

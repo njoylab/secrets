@@ -16,8 +16,44 @@ export const SENSITIVE_HEADERS: Readonly<Record<string, string>> = Object.freeze
   'referrer-policy': 'no-referrer',
   'x-content-type-options': 'nosniff',
   'x-frame-options': 'DENY',
-  'referrer': 'no-referrer',
+  referrer: 'no-referrer',
 });
+
+const HSTS_MAX_AGE = 'max-age=15552000';
+
+/**
+ * HSTS for HTTPS responses that are not localhost.
+ *
+ * Browsers ignore the header on plain HTTP. Localhost is excluded so a dev
+ * server cannot pin the browser to HTTPS. `includeSubDomains` is omitted: a
+ * sibling host may not speak TLS.
+ */
+export function hstsHeaderValue(request: Request): string | null {
+  const forwarded = request.headers.get('x-forwarded-proto')?.split(',')[0]?.trim().toLowerCase();
+  let https = forwarded === 'https';
+  if (!https) {
+    try {
+      https = new URL(request.url).protocol === 'https:';
+    } catch {
+      https = false;
+    }
+  }
+  if (!https) return null;
+
+  const hostHeader = request.headers.get('host')?.split(',')[0]?.trim().toLowerCase() ?? '';
+  const fromHeader = hostHeader.startsWith('[')
+    ? hostHeader.slice(1, hostHeader.indexOf(']'))
+    : hostHeader.replace(/:\d+$/, '');
+  let fromUrl = '';
+  try {
+    fromUrl = new URL(request.url).hostname.toLowerCase();
+  } catch {
+    fromUrl = '';
+  }
+  const hostname = fromHeader || fromUrl;
+  if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') return null;
+  return HSTS_MAX_AGE;
+}
 
 export function jsonResponse(
   body: unknown,

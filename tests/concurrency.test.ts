@@ -10,7 +10,15 @@ import { hashToken } from '../src/lib/crypto.ts';
 import { withClient } from '../src/lib/db.ts';
 import { resetConfigCache } from '../src/lib/env.ts';
 import { cancelSecret, createSecret, readControlStatus, revealSecret } from '../src/lib/secrets.ts';
-import { countReceipts, countSecrets, fetchReceipt, resetEnv, sealedSecret } from './helpers.ts';
+import {
+  countReceipts,
+  countSecrets,
+  dummyVerifier,
+  fetchReceipt,
+  lockWithLegacyPassword,
+  resetEnv,
+  sealedSecret,
+} from './helpers.ts';
 
 beforeEach(async () => {
   await resetEnv();
@@ -55,13 +63,11 @@ describe('parallel revealSecret', () => {
   it('gives the content to exactly one of three concurrent reveals on a protected secret', async () => {
     const created = await createSecret({
       payload: (await sealedSecret('protected single use')).payload,
+      verifier: await dummyVerifier(),
       expiresIn: '7d',
-      password: 'p4ssw0rd',
     });
 
-    const results = await Promise.all(
-      Array.from({ length: 3 }, () => revealSecret(created.token, 'p4ssw0rd')),
-    );
+    const results = await Promise.all(Array.from({ length: 3 }, () => revealSecret(created.token)));
 
     expect(countWinners(results)).toBe(1);
     for (const loser of results.filter((result) => !result.ok)) {
@@ -70,9 +76,10 @@ describe('parallel revealSecret', () => {
     expect(await countSecrets()).toBe(0);
   });
 
-  it('does not consume the secret when every concurrent attempt uses a wrong password', async () => {
+  it('does not consume the secret when every concurrent attempt uses a wrong legacy password', async () => {
     const { payload } = await sealedSecret('guarded payload');
-    const created = await createSecret({ payload, expiresIn: '7d', password: 'p4ssw0rd' });
+    const created = await createSecret({ payload, expiresIn: '7d' });
+    await lockWithLegacyPassword(created.token, 'p4ssw0rd');
 
     const results = await Promise.all(
       Array.from({ length: 3 }, (_unused, index) => revealSecret(created.token, `wrong-${index}`)),

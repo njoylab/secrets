@@ -10,7 +10,7 @@ import type { RateLimitRule } from './env.ts';
 
 export const CREATE_BUCKET = 'create';
 export const REVEAL_BUCKET = 'reveal';
-/** Cancellation is as expensive to abuse as a reveal attempt, so it shares its budget. */
+/** Cancel uses the reveal max and window, counted in its own bucket. */
 export const CANCEL_BUCKET = 'cancel';
 
 /** Every bucket the application charges against a per-IP budget. */

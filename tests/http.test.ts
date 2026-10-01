@@ -11,6 +11,7 @@ import {
   acceptableOrigins,
   checkPostOrigin,
   errorResponse,
+  hstsHeaderValue,
   isTrustedProxy,
   jsonResponse,
   resolveClientIp,
@@ -443,6 +444,18 @@ describe('sensitive response headers', () => {
       error: 'badPassword',
       message: 'Incorrect password',
     });
+  });
+
+  it('sends HSTS only for public HTTPS responses', () => {
+    expect(hstsHeaderValue(new Request('https://secrets.example/'))).toBe('max-age=15552000');
+    expect(
+      hstsHeaderValue(
+        new Request('http://secrets.example/', { headers: { 'x-forwarded-proto': 'https' } }),
+      ),
+    ).toBe('max-age=15552000');
+    expect(hstsHeaderValue(new Request('http://secrets.example/'))).toBeNull();
+    expect(hstsHeaderValue(new Request('https://localhost/'))).toBeNull();
+    expect(hstsHeaderValue(new Request('https://127.0.0.1:8443/'))).toBeNull();
   });
 
   it('emits retry-after only when a retry delay is supplied', () => {

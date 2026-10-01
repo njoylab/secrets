@@ -1,5 +1,5 @@
 import { defineMiddleware } from 'astro:middleware';
-import { SENSITIVE_HEADERS } from './lib/http.ts';
+import { hstsHeaderValue, SENSITIVE_HEADERS } from './lib/http.ts';
 import { detectLocale, getDictionary, LOCALE_COOKIE, normalizeLocale, type Locale } from './lib/i18n.ts';
 import { RESOLVED_IP_HEADER } from './lib/http.ts';
 
@@ -32,6 +32,8 @@ export const onRequest = defineMiddleware(async (context, next) => {
   for (const [header, value] of Object.entries(SENSITIVE_HEADERS)) {
     response.headers.set(header, value);
   }
+  const hsts = hstsHeaderValue(context.request);
+  if (hsts) response.headers.set('strict-transport-security', hsts);
   response.headers.set('x-robots-tag', getDictionary(locale).meta.robots);
 
   return response;

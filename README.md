@@ -65,24 +65,32 @@ npm start
 
 1. The browser generates a 32-byte content key and seals the secret as
    `base64url(nonce || ciphertext || tag)` with AES-256-GCM under that key.
-2. The browser POSTs only that sealed payload, an `expiresIn` preset and an
-   optional `password`. **The key is never sent.** The server never sees the
-   plaintext, so it cannot be read by the operator, by a database dump, or by
-   anything that gets hold of the rows.
+2. The browser POSTs only that sealed payload, an `expiresIn` preset and, when
+   a password was set, a short sealed verifier. **The key and the password are
+   never sent.** The password is mixed into the content key in the browser
+   (PBKDF2-HMAC-SHA256, 600,000 iterations, then HKDF with the fragment key).
+   The server never sees the plaintext or the password, so a database dump plus
+   the deployment key still cannot read a password-protected secret unless the
+   attacker also has the password.
 3. The server wraps the sealed payload in a second AES-256-GCM layer under
    `SECRET_ENCRYPTION_KEY` and stores the result. This is at-rest protection
    against a dump; it is not what protects the reader.
 4. The reply contains the share link **without** the fragment plus the control
    link. The browser appends `#<key>` from memory, so the key appears in no
    request, no header, no log line and no database row.
-5. The recipient opens `/s/<token>#<key>`. A GET never consumes anything: the
-   page only reports that a secret is waiting, and a deliberate POST to
-   `/api/secrets/reveal` performs the single `DELETE ... RETURNING` and returns
-   the sealed payload. The browser opens it with the key from the fragment.
+5. The recipient opens `/s/<token>#<key>`. The page reads the fragment and
+   removes it from the address bar. A GET never consumes anything. With a
+   password, the browser first asks for the verifier and checks it locally; a
+   wrong password does not reveal. A deliberate POST to `/api/secrets/reveal`
+   performs the single `DELETE ... RETURNING` and returns the sealed payload.
+   The browser opens it with the fragment key, or with the password-derived key.
 
-A `DELETE`, a browser history entry, an accidental paste into a chat and a
-referrer header therefore expose the URL but not the key. What is exposed is the
-claim, not the content.
+The server never receives the fragment, so a request log and a `Referer` header
+do not carry the key (`Referrer-Policy` is `no-referrer`, and browsers omit the
+fragment from `Referer` anyway). The open page removes the fragment from the
+current history entry after reading it. The link the creator copies still
+contains the key, so a paste into chat includes it. That link opens a secret
+once. With a password, the link alone is not enough.
 
 ## Environment variables
 
@@ -98,8 +106,8 @@ claim, not the content.
 | `ALLOWED_ORIGINS` | no | empty | Extra origins accepted for same-origin POSTs. |
 | `RATE_LIMIT_CREATE_MAX` | no | `20` | Secret creations allowed per window, per client IP. |
 | `RATE_LIMIT_CREATE_WINDOW_SECONDS` | no | `3600` | Creation window length. |
-| `RATE_LIMIT_REVEAL_MAX` | no | `30` | Reveal **and cancel** attempts allowed per window, per client IP. Cancellations share this budget: they are as cheap to abuse as a reveal and get no budget of their own. |
-| `RATE_LIMIT_REVEAL_WINDOW_SECONDS` | no | `300` | Reveal/cancel window length. |
+| `RATE_LIMIT_REVEAL_MAX` | no | `30` | Reveal attempts allowed per window, per client IP. Cancel uses the same maximum, counted in its own bucket, so the two budgets are independent. |
+| `RATE_LIMIT_REVEAL_WINDOW_SECONDS` | no | `300` | Window length for the reveal counter and, separately, for the cancel counter. |
 | `COOKIE_SECURE` | no | `true` when `NODE_ENV=production`, otherwise `false` | `Secure` attribute on the locale cookie. |
 | `CLEANUP_KEEP_COUNTER_SECONDS` | no | `3600` | Read only by `npm run cleanup`: age after which idle rate limit counters are deleted. |
 
@@ -163,7 +171,10 @@ timer, for example every hour:
 
 - `npm run build` emits the server bundle at `dist/server/entry.mjs`; `npm start` runs `server.mjs`, which imports that bundle.
 - `server.mjs` is required in production, not just a convenience: it is what makes forwarding headers and the client IP trustworthy (see above).
-- Run it behind a TLS-terminating reverse proxy and set `COOKIE_SECURE=true`.
+- Run it behind a TLS-terminating reverse proxy, set `COOKIE_SECURE=true`, and
+  send `Strict-Transport-Security` from that proxy. The app also sets HSTS on
+  HTTPS responses whose host is not localhost, so a first visit over HTTP cannot
+  be rewritten into a page that reads the fragment.
 - Set the environment variables in the process manager (systemd `Environment=`,
   PM2, container env) rather than in a file, and keep `.env` out of the deployment.
 - Run `npm run migrate` as a deploy step before switching traffic.
@@ -180,23 +191,27 @@ timer, for example every hour:
 
 ## Security notes
 
-- **The server cannot read the secrets it stores.** The content key lives only in
-  the link fragment, is generated in the browser, and is never included in a
-  request body, a header, a log or a row. This is the property the whole design
-  rests on; the second, server-side layer is defence in depth, not the main lock.
-  Be aware of the precise claim: this is client-side encryption with the key
-  delivered out of band, not audited end-to-end encryption. A reader whose device
-  is compromised still exposes the content, and the operator can delete or
-  refuse a link but cannot reconstruct one.
+- **The server cannot read the secrets it stores, as long as it serves this
+  client.** The content key lives only in the link fragment and is never
+  included in a request body, a header, a log or a row. A password, when set,
+  is mixed into that key and is not stored. A database dump, the deployment key
+  and the process memory are not enough to read the text; with a password, the
+  link alone is not enough either. This is client-side encryption, not audited
+  end-to-end encryption. An operator who replaces the page can read secrets
+  created or opened after that change. A compromised device can read them too.
 - Tokens and control tokens carry 256 bits of randomness each and are independent
   of each other. Only their SHA-256 hashes are stored, so a database dump does not
   yield usable links, and a leaked control token cannot be used to read anything.
 - Stored content is wrapped with AES-256-GCM under a random per-secret nonce.
   Revealing returns the sealed payload, never text, and only after the deleting
   statement has committed.
-- Passwords use scrypt (N=32768, r=8, p=1) with a random 16-byte salt per
-  secret. A wrong password is rejected before any delete runs, never consumes the
-  secret, and never holds a database lock while it is computed.
+- Optional passwords never reach the server. The browser derives a key with
+  PBKDF2-HMAC-SHA256 (600,000 iterations) and HKDF over the fragment key, and
+  stores only a sealed verifier. A wrong password fails that check locally and
+  does not consume the secret. A caller that skips the check can still burn the
+  row and take the ciphertext, which remains unreadable without the password.
+  Rows created before this change keep a scrypt hash (N=32768, r=8, p=1) and
+  still reject a wrong password on the server, outside any database lock.
 - Consumption is a single conditional `DELETE ... RETURNING` inside the same
   transaction that writes the `read` receipt, so at most one concurrent request
   can ever obtain the content and the state reported afterwards always matches it.
