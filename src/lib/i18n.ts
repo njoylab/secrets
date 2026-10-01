@@ -44,12 +44,15 @@ export type Dictionary = {
     title: string;
     linkLabel: string;
     controlLabel: string;
+    controlHint: string;
     copy: string;
     copied: string;
     copyFailed: string;
     expires: string;
     another: string;
     passwordLabel: string;
+    passwordShow: string;
+    passwordHide: string;
     noteKeyInFragment: string;
   };
   open: {
@@ -67,6 +70,7 @@ export type Dictionary = {
   };
   control: {
     title: string;
+    stateLabel: string;
     pending: string;
     read: string;
     expired: string;
@@ -78,7 +82,7 @@ export type Dictionary = {
     cancelFailed: string;
   };
   secret: {
-    title: string;
+    panelTitle: string;
     copy: string;
     copied: string;
     copyFailed: string;
@@ -88,8 +92,11 @@ export type Dictionary = {
   errors: {
     payloadRequired: string;
     payloadTooLong: string;
+    invalidPayload: string;
+    invalidVerifier: string;
     invalidExpiry: string;
     passwordTooLong: string;
+    passwordRejected: string;
     badPassword: string;
     unavailable: string;
     rateLimited: string;
@@ -133,12 +140,15 @@ const it: Dictionary = {
     title: 'Link pronto',
     linkLabel: 'Link monouso',
     controlLabel: 'Link di controllo',
+    controlHint: 'Annulla il segreto. Non inviarlo a chi legge il segreto.',
     copy: 'Copia',
     copied: 'Copiato',
     copyFailed: 'Copia non riuscita',
     expires: 'Scadenza',
     another: 'Nuovo segreto',
     passwordLabel: 'Password',
+    passwordShow: 'Mostra password',
+    passwordHide: 'Nascondi password',
     noteKeyInFragment: 'La chiave è nel link, dopo #',
   },
 
@@ -158,6 +168,7 @@ const it: Dictionary = {
 
   control: {
     title: 'Controllo',
+    stateLabel: 'Stato',
     pending: 'In attesa',
     read: 'Letto',
     expired: 'Scaduto',
@@ -170,7 +181,7 @@ const it: Dictionary = {
   },
 
   secret: {
-    title: 'Segreto',
+    panelTitle: 'Contenuto',
     copy: 'Copia',
     copied: 'Copiato',
     copyFailed: 'Copia non riuscita',
@@ -181,8 +192,11 @@ const it: Dictionary = {
   errors: {
     payloadRequired: 'Inserisci un segreto',
     payloadTooLong: 'Limite 50 KiB',
+    invalidPayload: 'Segreto non valido',
+    invalidVerifier: 'Verifica non valida',
     invalidExpiry: 'Scadenza non valida',
     passwordTooLong: 'Password troppo lunga',
+    passwordRejected: 'Non inviare la password',
     badPassword: 'Password errata',
     unavailable: 'Link non disponibile',
     rateLimited: 'Troppe richieste. Riprova più tardi.',
@@ -224,12 +238,15 @@ const en: Dictionary = {
     title: 'Link ready',
     linkLabel: 'One-time link',
     controlLabel: 'Control link',
+    controlHint: 'Cancels the secret. Do not send it to whoever reads the secret.',
     copy: 'Copy',
     copied: 'Copied',
     copyFailed: 'Copy failed',
     expires: 'Expires',
     another: 'New secret',
     passwordLabel: 'Password',
+    passwordShow: 'Show password',
+    passwordHide: 'Hide password',
     noteKeyInFragment: 'The key is in the link, after #',
   },
 
@@ -249,6 +266,7 @@ const en: Dictionary = {
 
   control: {
     title: 'Control',
+    stateLabel: 'State',
     pending: 'Pending',
     read: 'Read',
     expired: 'Expired',
@@ -261,7 +279,7 @@ const en: Dictionary = {
   },
 
   secret: {
-    title: 'Secret',
+    panelTitle: 'Content',
     copy: 'Copy',
     copied: 'Copied',
     copyFailed: 'Copy failed',
@@ -272,8 +290,11 @@ const en: Dictionary = {
   errors: {
     payloadRequired: 'Enter a secret',
     payloadTooLong: '50 KiB limit',
+    invalidPayload: 'Invalid secret',
+    invalidVerifier: 'Invalid verifier',
     invalidExpiry: 'Invalid expiry',
     passwordTooLong: 'Password too long',
+    passwordRejected: 'Do not send the password',
     badPassword: 'Incorrect password',
     unavailable: 'Link unavailable',
     rateLimited: 'Too many requests. Try again later.',

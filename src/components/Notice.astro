@@ -6,11 +6,22 @@ interface Props {
   headingId?: string;
   /** Lets a script replace the hint, which is the only place a page can explain itself. */
   hintId?: string;
+  /** Marks the hint as a live region: used where the panel replaces the form. */
+  live?: boolean;
   class?: string;
   hidden?: boolean;
 }
 
-const { heading, hint, id, headingId, hintId, class: className, hidden = false } = Astro.props;
+const {
+  heading,
+  hint,
+  id,
+  headingId,
+  hintId,
+  live = false,
+  class: className,
+  hidden = false,
+} = Astro.props;
 ---
 
 <section
@@ -21,5 +32,5 @@ const { heading, hint, id, headingId, hintId, class: className, hidden = false }
   hidden={hidden ? true : undefined}
 >
   <h2 class="panel-title" id={headingId}>{heading}</h2>
-  {hint && <p class="note" id={hintId}>{hint}</p>}
+  {hint && <p class="note" id={hintId} role={live ? 'status' : undefined} aria-live={live ? 'polite' : undefined}>{hint}</p>}
 </section>

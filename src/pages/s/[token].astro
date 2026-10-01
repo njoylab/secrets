@@ -2,6 +2,7 @@
 import Notice from '../../components/Notice.astro';
 import Panel from '../../components/Panel.astro';
 import PasswordField from '../../components/PasswordField.astro';
+import Icon from '../../components/Icon.astro';
 import Layout from '../../layouts/Layout.astro';
 import { getDictionary } from '../../lib/i18n.ts';
 import { peekSecretPresence } from '../../lib/secrets.ts';
@@ -32,11 +33,13 @@ const presence = await peekSecretPresence(token);
             class="form"
             novalidate
             data-token={token}
+            data-password-mode={presence.password}
             data-error-server={t.errors.serverError}
+            data-error-bad-password={t.errors.badPassword}
             data-error-missing-key={t.open.missingKey}
             data-error-key-failed={t.open.keyFailed}
           >
-            {presence.requiresPassword && (
+            {presence.password !== 'none' && (
               <PasswordField
                 id="open-password"
                 label={t.open.passwordLabel}
@@ -54,23 +57,26 @@ const presence = await peekSecretPresence(token);
               data-label-idle={t.open.reveal}
               data-label-busy={t.open.revealing}
             >
-              {t.open.reveal}
+              <Icon name="key" />
+              <span class="btn-label">{t.open.reveal}</span>
             </button>
             <p class="note">{t.open.noteSingleRead}</p>
           </form>
         </Panel>
 
-        <Panel id="secret-panel" heading={t.secret.title} headingId="secret-title" hidden>
-          <pre class="secret" id="secret-text" tabindex="0"></pre>
+        <Panel id="secret-panel" heading={t.secret.panelTitle} headingId="secret-title" hidden>
+          <pre class="secret" id="secret-text" tabindex="0" translate="no"></pre>
           <button
             type="button"
-            class="btn btn-ghost align-start"
+            class="btn btn-ghost btn-copy align-start"
             id="secret-copy"
             data-label-idle={t.secret.copy}
             data-label-done={t.secret.copied}
             data-label-failed={t.secret.copyFailed}
           >
-            {t.secret.copy}
+            <Icon name="copy" class="icon icon-copy" />
+            <Icon name="check" class="icon icon-done" />
+            <span class="btn-label">{t.secret.copy}</span>
           </button>
           <p class="status" id="secret-status" role="status" aria-live="polite"></p>
           <p class="panel-title">{t.secret.consumed}</p>
@@ -83,6 +89,7 @@ const presence = await peekSecretPresence(token);
           hintId="secret-consumed-hint"
           heading={t.secret.consumed}
           hint={t.secret.consumedHint}
+          live
           hidden
         />
       </>
@@ -91,7 +98,13 @@ const presence = await peekSecretPresence(token);
 </Layout>
 
 <script>
-  import { decodeContentKey, decryptPayload } from '../../lib/content-crypto.ts';
+  import {
+    PASSWORD_VERIFIER_TEXT,
+    decodeShareFragment,
+    decryptPayload,
+    derivePasswordKey,
+    type ContentBytes,
+  } from '../../lib/content-crypto.ts';
 
   interface RevealApiResponse {
     ok?: boolean;
@@ -144,10 +157,23 @@ const presence = await peekSecretPresence(token);
     }
   }
 
-  /** The key comes from the fragment, which the server has never seen. */
-  function contentKeyFromFragment(): Uint8Array | null {
-    return decodeContentKey(window.location.hash.replace(/^#/, ''));
+  /**
+   * Read the fragment once, then drop it from the address bar.
+   *
+   * The current history entry is replaced, so a later copy of the URL, a
+   * synced history and a shared screen do not carry the content key. The key
+   * stays in this closure until the page is closed.
+   */
+  function takeFragment(): ReturnType<typeof decodeShareFragment> {
+    const fragment = decodeShareFragment(window.location.hash.replace(/^#/, ''));
+    if (window.location.hash.length > 0) {
+      const bare = `${window.location.pathname}${window.location.search}`;
+      window.history.replaceState(null, '', bare);
+    }
+    return fragment;
   }
+
+  const openedFragment = takeFragment();
 
   function initRevealFlow(): void {
     const form = byId<HTMLFormElement>('open-form');
@@ -167,9 +193,13 @@ const presence = await peekSecretPresence(token);
 
     // The token travels as a data attribute, never as an interpolated script string.
     const token = form.dataset.token ?? '';
+    const passwordMode = form.dataset.passwordMode ?? 'none';
     const serverError = form.dataset.errorServer ?? '';
+    const badPassword = form.dataset.errorBadPassword ?? '';
     const missingKey = form.dataset.errorMissingKey ?? '';
     const keyFailed = form.dataset.errorKeyFailed ?? '';
+    const fragmentKey = openedFragment?.key ?? null;
+    const salt = openedFragment?.salt ?? null;
     const revealIdle = submit.dataset.labelIdle ?? submit.textContent ?? '';
     const revealBusy = submit.dataset.labelBusy ?? revealIdle;
     const copyIdle = copyButton.dataset.labelIdle ?? '';
@@ -179,6 +209,26 @@ const presence = await peekSecretPresence(token);
     // A revealed secret is consumed server side: no second read is ever attempted.
     let revealed = false;
     let copyTimer = 0;
+
+    /**
+     * Every message this page can produce is a failure: a dead link, a wrong
+     * password, a spent row. They are therefore written through one helper, so
+     * no branch can quietly land in the confirmation hue.
+     */
+    const fail = (message: string): void => {
+      status.textContent = message;
+      status.classList.add('is-error');
+    };
+
+    /** The label lives in its own span: the icons must survive label swaps. */
+    const setButtonLabel = (button: HTMLButtonElement, text: string): void => {
+      const label = button.querySelector<HTMLElement>('.btn-label');
+      if (label) {
+        label.textContent = text;
+        return;
+      }
+      button.textContent = text;
+    };
 
     /**
      * The single dead end. `message` replaces the hint only when the reason is
@@ -191,7 +241,8 @@ const presence = await peekSecretPresence(token);
       if (message && consumedHint) consumedHint.textContent = message;
       if (!consumed) return;
       consumed.hidden = false;
-      consumed.focus();
+      // The panel carries a live region of its own, so the reason is announced
+      // from the visible copy rather than from the form that just went away.
     };
 
     form.addEventListener('submit', async (event) => {
@@ -200,21 +251,66 @@ const presence = await peekSecretPresence(token);
 
       // Without a usable key the POST cannot produce anything readable, and it
       // would consume the secret to prove it. Refuse before spending it.
-      const key = contentKeyFromFragment();
-      if (!key) {
-        status.textContent = missingKey;
+      if (!fragmentKey) {
+        fail(missingKey);
+        return;
+      }
+      if (passwordMode === 'client' && !salt) {
+        fail(missingKey);
+        return;
+      }
+      if (passwordMode !== 'client' && salt) {
+        fail(keyFailed);
         return;
       }
 
       status.textContent = '';
+      status.classList.remove('is-error');
       submit.setAttribute('aria-busy', 'true');
       submit.disabled = true;
-      submit.textContent = revealBusy;
+      setButtonLabel(submit, revealBusy);
 
-      const body: { token: string; password?: string } = { token };
-      if (password && password.value.length > 0) body.password = password.value;
+      let openingKey: ContentBytes = fragmentKey;
 
       try {
+        if (passwordMode === 'client') {
+          const supplied = password?.value ?? '';
+          if (supplied.length === 0 || !salt) {
+            fail(badPassword);
+            if (password) password.focus();
+            return;
+          }
+          const check = await fetch('/api/secrets/verifier', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ token }),
+          });
+          const checkBody = (await check.json()) as RevealApiResponse & { verifier?: string };
+          if (!check.ok || checkBody.ok !== true || typeof checkBody.verifier !== 'string') {
+            fail(typeof checkBody.message === 'string' ? checkBody.message : serverError);
+            return;
+          }
+          try {
+            openingKey = await derivePasswordKey(fragmentKey, supplied, salt);
+            const opened = await decryptPayload(checkBody.verifier, openingKey);
+            if (opened !== PASSWORD_VERIFIER_TEXT) throw new Error('Verifier text did not match');
+          } catch {
+            fail(badPassword);
+            if (password) {
+              password.focus();
+              password.select();
+            }
+            return;
+          }
+        }
+
+        const body: { token: string; password?: string } = { token };
+        // Legacy rows still gate reveal on the server. New rows never send it.
+        if (passwordMode === 'server' && password && password.value.length > 0) {
+          body.password = password.value;
+        }
+
         const response = await fetch('/api/secrets/reveal', {
           method: 'POST',
           credentials: 'same-origin',
@@ -229,7 +325,7 @@ const presence = await peekSecretPresence(token);
           // altered in transit, and there is no second read to fall back on.
           let plaintext: string;
           try {
-            plaintext = await decryptPayload(payload.payload, key as any);
+            plaintext = await decryptPayload(payload.payload, openingKey);
           } catch {
             showConsumed(keyFailed);
             return;
@@ -250,32 +346,29 @@ const presence = await peekSecretPresence(token);
           return;
         }
 
-        status.textContent = typeof payload.message === 'string' ? payload.message : serverError;
+        fail(typeof payload.message === 'string' ? payload.message : serverError);
         if (payload.error === 'badPassword' && password) {
           password.focus();
           password.select();
         }
       } catch {
-        status.textContent = serverError;
+        fail(serverError);
       } finally {
         submit.removeAttribute('aria-busy');
         submit.disabled = false;
-        submit.textContent = revealIdle;
+        setButtonLabel(submit, revealIdle);
       }
     });
 
     copyButton.addEventListener('click', async () => {
       const copied = await copyToClipboard(secretText.textContent ?? '');
       window.clearTimeout(copyTimer);
-      if (copied) {
-        copyButton.textContent = copyDone;
-        copyStatus.textContent = copyDone;
-      } else {
-        copyButton.textContent = copyIdle;
-        copyStatus.textContent = copyFailed;
-      }
+      copyButton.dataset.copied = copied ? 'true' : 'false';
+      setButtonLabel(copyButton, copied ? copyDone : copyIdle);
+      copyStatus.textContent = copied ? copyDone : copyFailed;
       copyTimer = window.setTimeout(() => {
-        copyButton.textContent = copyIdle;
+        copyButton.dataset.copied = 'false';
+        setButtonLabel(copyButton, copyIdle);
         copyStatus.textContent = '';
       }, COPY_RESET_DELAY);
     });

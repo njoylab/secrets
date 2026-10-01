@@ -1,5 +1,6 @@
 ---
 import Panel from '../../components/Panel.astro';
+import Icon from '../../components/Icon.astro';
 import Layout from '../../layouts/Layout.astro';
 import { getDictionary } from '../../lib/i18n.ts';
 import { readControlStatus } from '../../lib/secrets.ts';
@@ -13,6 +14,18 @@ const token = Astro.params.token ?? '';
 // writes a receipt, so this page can be reloaded as often as wanted. An unknown
 // token and a receipt already purged both land on the single "unavailable" panel.
 const status = await readControlStatus(token);
+
+// Formatted here, not in the browser: the instant is known at render time, so
+// the page never has to show the raw ISO string first.
+const formatInstant = (value: Date, tag: string): string => {
+  try {
+    return new Intl.DateTimeFormat(tag, { dateStyle: 'medium', timeStyle: 'short' }).format(value);
+  } catch {
+    return value.toISOString();
+  }
+};
+
+const expiresAt = status?.expiresAt ? formatInstant(status.expiresAt, locale) : '';
 ---
 
 <Layout title={t.control.title}>
@@ -21,35 +34,55 @@ const status = await readControlStatus(token);
   {
     status === null ? (
       <Panel>
-        <p class="notice-message state-closed">{t.control.unavailable}</p>
+        <p class="notice-message" data-tone="closed">{t.control.unavailable}</p>
       </Panel>
     ) : (
-      <Panel id="control-panel" heading={t.control.title} headingId="control-panel-title">
+      <Panel id="control-panel" heading={t.control.stateLabel} headingId="control-panel-title">
         <div id="control-states" role="status" aria-live="polite">
-          <p class="notice-message" id="control-state-pending" hidden={status.state !== 'pending'}>
+          <p
+            class="notice-message"
+            data-tone="pending"
+            id="control-state-pending"
+            hidden={status.state !== 'pending'}
+          >
             {t.control.pending}
           </p>
-          <p class="notice-message state-closed" id="control-state-read" hidden={status.state !== 'read'}>
+          <p
+            class="notice-message"
+            data-tone="ok"
+            data-fill="solid"
+            id="control-state-read"
+            hidden={status.state !== 'read'}
+          >
             {t.control.read}
           </p>
-          <p class="notice-message state-closed" id="control-state-expired" hidden={status.state !== 'expired'}>
+          <p
+            class="notice-message"
+            data-tone="closed"
+            id="control-state-expired"
+            hidden={status.state !== 'expired'}
+          >
             {t.control.expired}
           </p>
-          <p class="notice-message state-closed" id="control-state-cancelled" hidden={status.state !== 'cancelled'}>
+          <p
+            class="notice-message"
+            data-tone="closed"
+            data-fill="solid"
+            id="control-state-cancelled"
+            hidden={status.state !== 'cancelled'}
+          >
             {t.control.cancelled}
           </p>
           {/* Reachable only when a receipt is purged between the render and a cancel. */}
-          <p class="notice-message state-closed" id="control-state-unavailable" hidden>
+          <p class="notice-message" data-tone="closed" id="control-state-unavailable" hidden>
             {t.control.unavailable}
           </p>
         </div>
 
-        {status.expiresAt && (
+        {expiresAt && (
           <p class="meta">
             <span class="meta-label">{t.control.expires}</span>
-            <span id="control-expiry" data-locale={locale}>
-              {status.expiresAt.toISOString()}
-            </span>
+            <span id="control-expiry">{expiresAt}</span>
           </p>
         )}
 
@@ -64,12 +97,13 @@ const status = await readControlStatus(token);
           <p class="status" id="control-status" role="status"></p>
           <button
             type="submit"
-            class="btn btn-block"
+            class="btn btn-danger btn-block"
             id="control-cancel"
             data-label-idle={t.control.cancel}
             data-label-busy={t.control.cancelling}
           >
-            {t.control.cancel}
+            <Icon name="alert" />
+            <span class="btn-label">{t.control.cancel}</span>
           </button>
         </form>
       </Panel>
@@ -102,16 +136,6 @@ const status = await readControlStatus(token);
     return document.getElementById(id) as T | null;
   }
 
-  function formatInstant(value: string, locale: string): string {
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return value;
-    try {
-      return new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
-    } catch {
-      return value;
-    }
-  }
-
   function initControlFlow(): void {
     const form = byId<HTMLFormElement>('control-form');
     if (!form) return;
@@ -119,7 +143,6 @@ const status = await readControlStatus(token);
     const panel = byId<HTMLElement>('control-panel');
     const status = byId<HTMLElement>('control-status');
     const cancelButton = byId<HTMLButtonElement>('control-cancel');
-    const expiry = byId<HTMLElement>('control-expiry');
     if (!panel || !cancelButton || !status) return;
 
     // The token travels as a data attribute, never as an interpolated script string.
@@ -128,9 +151,15 @@ const status = await readControlStatus(token);
     const cancelIdle = cancelButton.dataset.labelIdle ?? '';
     const cancelBusy = cancelButton.dataset.labelBusy ?? cancelIdle;
 
-    if (expiry) {
-      expiry.textContent = formatInstant(expiry.textContent ?? '', expiry.dataset.locale ?? 'en');
-    }
+    /** The label lives in its own span: the icon must survive label swaps. */
+    const setButtonLabel = (button: HTMLButtonElement, text: string): void => {
+      const label = button.querySelector<HTMLElement>('.btn-label');
+      if (label) {
+        label.textContent = text;
+        return;
+      }
+      button.textContent = text;
+    };
 
     /**
      * Repaint from a state alone. Every transition ends up here, including the
@@ -151,9 +180,10 @@ const status = await readControlStatus(token);
       if (form.hidden) return;
 
       status.textContent = '';
+      status.classList.remove('is-error');
       cancelButton.setAttribute('aria-busy', 'true');
       cancelButton.disabled = true;
-      cancelButton.textContent = cancelBusy;
+      setButtonLabel(cancelButton, cancelBusy);
 
       try {
         const response = await fetch('/api/secrets/cancel', {
@@ -176,12 +206,14 @@ const status = await readControlStatus(token);
         }
 
         status.textContent = typeof payload.message === 'string' ? payload.message : serverError;
+        status.classList.add('is-error');
       } catch {
         status.textContent = serverError;
+        status.classList.add('is-error');
       } finally {
         cancelButton.removeAttribute('aria-busy');
         cancelButton.disabled = false;
-        cancelButton.textContent = cancelIdle;
+        setButtonLabel(cancelButton, cancelIdle);
       }
     });
   }

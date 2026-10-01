@@ -6,6 +6,7 @@ import {
   MAX_SECRET_BYTES,
 } from '../lib/secrets.ts';
 import { getDictionary } from '../lib/i18n.ts';
+import Icon from './Icon.astro';
 import PasswordField from './PasswordField.astro';
 
 const t = getDictionary(Astro.locals.locale);
@@ -35,6 +36,7 @@ const t = getDictionary(Astro.locals.locale);
       spellcheck="false"
       autocapitalize="off"
       autocomplete="off"
+      translate="no"
       placeholder={t.create.secretPlaceholder}
       aria-describedby="secret-hint"
     ></textarea>
@@ -42,7 +44,7 @@ const t = getDictionary(Astro.locals.locale);
   </div>
 
   <div class="field">
-    <label for="expiry">{t.create.expiryLabel}</label>
+    <label for="expiry"><Icon name="clock" />{t.create.expiryLabel}</label>
     <select id="expiry" name="expiresIn">
       {
         EXPIRY_PRESETS.map((preset) => (
@@ -77,6 +79,7 @@ const t = getDictionary(Astro.locals.locale);
     data-label-idle={t.create.submit}
     data-label-busy={t.create.submitting}
   >
-    {t.create.submit}
+    <Icon name="key" />
+    <span class="btn-label">{t.create.submit}</span>
   </button>
 </form>

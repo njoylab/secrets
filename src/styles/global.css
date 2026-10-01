@@ -2,6 +2,10 @@
  * Single stylesheet: near-black surface, one accent hue, hairline borders.
  * No gradients, no decorative shadows, no motion beyond a short colour
  * transition on interactive elements. System fonts only, no remote assets.
+ *
+ * The one departure from "one accent hue": two semantic hues, because failure
+ * and waiting are not success and must never be painted in the success colour.
+ * Nothing decorative uses them.
  */
 :root {
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -12,14 +16,22 @@
   --surface-raised: #16191d;
   --text: #e7e9ec;
   --text-muted: #8f959e;
-  --border: #272b31;
-  --border-strong: #33383f;
-  --border-hover: #454c55;
+  --placeholder: #767d87;
 
-  /* One accent hue, plus a lighter tint of the same hue for hover states. */
+  /* Hairline rules stay quiet and separate panels from the page. Any boundary
+   * the user has to see to aim at a control uses --border-strong, cleared of
+   * the 3:1 floor that WCAG 1.4.11 asks of non-text contrast. */
+  --border: #2f343b;
+  --border-strong: #5a626d;
+  --border-hover: #6f7883;
+
+  /* One accent hue for the positive, plus two semantic hues for the states
+   * that are not a success. */
   --accent: #34d399;
   --accent-hover: #5cddb0;
   --accent-ink: #052e21;
+  --danger: #f87171;
+  --pending: #fbbf24;
 
   --radius: 4px;
   --tap: 40px;
@@ -57,6 +69,16 @@ body {
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+::selection {
+  background: #1d5c45;
+  color: var(--text);
+}
+
+::placeholder {
+  color: var(--placeholder);
+  opacity: 1;
 }
 
 .visually-hidden {
@@ -119,10 +141,12 @@ main:focus-visible {
 .page-title {
   margin: 0;
   font-family: var(--font-mono);
-  font-size: 1rem;
-  font-weight: 500;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-size: 1.25rem;
+  font-weight: 600;
+  /* The one display size in the interface. Tight tracking and no uppercase:
+   * the page title reads as a title, while uppercase stays reserved for the
+   * label register, so the two levels never look alike. */
+  letter-spacing: -0.01em;
   color: var(--text);
 }
 
@@ -162,6 +186,10 @@ main:focus-visible {
 }
 
 .lang-caption {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   color: var(--text-muted);
 }
 
@@ -189,13 +217,42 @@ main:focus-visible {
 
 /* Panels */
 .panel {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 20px;
   padding: 20px;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+}
+
+/*
+ * Corner registration marks: the one ornament, and the motif that ties the
+ * panels together. A cut corner was tried first and rejected: clip-path on the
+ * panel clips the edge it would have to redraw, and closing that gap needs a
+ * wrapper or a gradient. These brackets need neither.
+ */
+.panel::before,
+.panel::after {
+  content: "";
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  pointer-events: none;
+}
+
+.panel::before {
+  top: 5px;
+  left: 5px;
+  border-top: 1px solid var(--border-hover);
+  border-left: 1px solid var(--border-hover);
+}
+
+.panel::after {
+  right: 5px;
+  bottom: 5px;
+  border-right: 1px solid var(--border-hover);
+  border-bottom: 1px solid var(--border-hover);
 }
 
 .panel-title {
@@ -208,11 +265,49 @@ main:focus-visible {
   color: var(--text-muted);
 }
 
+/* State messages: the leading marker carries the meaning, the hue only
+ * reinforces it, so the states survive without colour. */
 .notice-message {
   margin: 0;
   font-family: var(--font-mono);
   font-size: 0.9375rem;
   color: var(--text);
+}
+
+.notice-message::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 10px;
+  border: 1px solid currentColor;
+  vertical-align: 1px;
+}
+
+.notice-message[data-tone="pending"] {
+  color: var(--pending);
+}
+
+/* Filled means it happened, hollow means it has not: two shapes and three
+   hues, so no two states are separated by colour alone. */
+.notice-message[data-tone="ok"]::before {
+  background: currentColor;
+}
+
+.notice-message[data-tone="ok"] {
+  color: var(--accent);
+}
+
+.notice-message[data-tone="closed"] {
+  color: var(--text-muted);
+}
+
+.notice-message[data-tone="closed"][data-fill="solid"]::before {
+  background: currentColor;
+}
+
+.notice-message[data-tone="danger"] {
+  color: var(--danger);
 }
 
 /* Forms */
@@ -289,23 +384,13 @@ textarea:hover {
 
 input[aria-invalid="true"],
 textarea[aria-invalid="true"] {
-  border-color: var(--accent);
+  border-color: var(--danger);
 }
 
-.input-mono {
-  font-family: var(--font-mono) !important;
-  font-size: 0.875rem !important;
-}
-
-.control {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-/* Control link: every state other than pending is terminal, so it reads quieter. */
-.notice-message.state-closed {
-  color: var(--text-muted);
+/* Outranks the element+attribute selector above without resorting to !important. */
+input.input-mono {
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
 }
 
 /* Buttons */
@@ -324,11 +409,20 @@ textarea[aria-invalid="true"] {
   line-height: 1.2;
   text-align: center;
   cursor: pointer;
-  transition: background-color var(--transition), border-color var(--transition), color var(--transition);
+  transition: background-color var(--transition), border-color var(--transition), color var(--transition),
+    transform 80ms ease;
 }
 
 .btn:hover {
   border-color: var(--accent);
+}
+
+/* Press feedback: one millimetre, the shortest honest answer to a click while
+ * the request is in flight. Dropped entirely when motion is not welcome. */
+@media (prefers-reduced-motion: no-preference) {
+  .btn:active:not(:disabled) {
+    transform: translateY(1px);
+  }
 }
 
 .btn:disabled {
@@ -357,6 +451,20 @@ textarea[aria-invalid="true"] {
   background: transparent;
   padding: 0 12px;
   font-size: 0.8125rem;
+}
+
+/* Outlined, never filled: the cancel action destroys the secret, and a solid
+ * block of red would shout louder than the state it produces. */
+.btn-danger {
+  background: transparent;
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+}
+
+.btn-danger:hover {
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  border-color: var(--danger);
+  color: var(--danger);
 }
 
 .btn-block {
@@ -401,6 +509,13 @@ textarea[aria-invalid="true"] {
   color: var(--text-muted);
 }
 
+/* The expiry instant only exists once the response lands, so the slot is
+ * reserved: the value appears without moving anything around it. */
+.meta-value:empty {
+  display: inline-block;
+  min-width: 13ch;
+}
+
 /* Revealed secret: whitespace and newlines are preserved exactly. */
 .secret {
   margin: 0;
@@ -417,13 +532,24 @@ textarea[aria-invalid="true"] {
   white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: anywhere;
+  /* The block scrolls; a hairline scrollbar says so without a fade. */
+  scrollbar-color: var(--border-hover) transparent;
+  scrollbar-width: thin;
 }
 
 /* Inline feedback and hints */
+/* Confirmation is accent. A failure is danger, and it says so with a rule as
+ * well as a hue: the message is never told apart by colour alone. */
 .status {
   margin: 0;
   font-size: 0.875rem;
   color: var(--accent);
+}
+
+.status.is-error {
+  padding-left: 10px;
+  border-left: 2px solid var(--danger);
+  color: var(--danger);
 }
 
 .note {
@@ -441,6 +567,53 @@ textarea[aria-invalid="true"] {
   gap: 4px;
   font-size: 0.8125rem;
   color: var(--text-muted);
+}
+
+/* Icons: inline, currentColor, one weight. A stroke icon at 14px in a 12px
+ * uppercase label stays a mark, never a picture. */
+.icon {
+  flex: none;
+  color: var(--text-muted);
+}
+
+label .icon {
+  width: 13px;
+  height: 13px;
+  margin-right: 6px;
+  vertical-align: -2px;
+}
+
+.btn .icon {
+  width: 15px;
+  height: 15px;
+  margin-right: 7px;
+  color: currentColor;
+}
+
+/* The copy confirmation is carried by the button's own label, so the icon only
+ * has to add the tick: swap it on the copied state and nothing else. */
+.btn-copy .icon-done {
+  display: none;
+}
+
+.btn-copy[data-copied="true"] .icon-copy {
+  display: none;
+}
+
+.btn-copy[data-copied="true"] .icon-done {
+  display: block;
+}
+
+/* The control link destroys the secret, so its label wears the danger hue and
+ * says what it is for before the link is ever pasted anywhere. */
+.field-kill label .icon,
+.field-kill label {
+  color: var(--danger);
+}
+
+.field-kill .note {
+  color: var(--danger);
+  opacity: 0.85;
 }
 
 /* Footer */
@@ -466,5 +639,11 @@ textarea[aria-invalid="true"] {
 
   .lang a {
     padding: 0 8px;
+  }
+
+  /* Stacks the copy row instead of squeezing the link and a 57px button onto
+   * one line: full-width link, full-width action. */
+  .copy-row > .btn {
+    flex: 1 1 100%;
   }
 }

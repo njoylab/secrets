@@ -17,13 +17,18 @@ const t = getDictionary(Astro.locals.locale);
 
 <script>
   import {
+    PASSWORD_VERIFIER_TEXT,
+    derivePasswordKey,
+    encodeShareFragment,
     encryptPayload,
-    encodeContentKey,
     generateContentKey,
+    generatePasswordSalt,
+    shareUrl,
   } from '../lib/content-crypto.ts';
 
   interface CreateApiResponse {
     ok?: boolean;
+    token?: string;
     url?: string;
     controlUrl?: string;
     expiresAt?: string;
@@ -167,8 +172,22 @@ const t = getDictionary(Astro.locals.locale);
 
     const copyTimers = new Map<HTMLButtonElement, number>();
 
+    /**
+     * The label lives in its own span: assigning textContent on the button
+     * itself would throw the icons away on the first copy.
+     */
+    const setButtonLabel = (button: HTMLButtonElement, text: string): void => {
+      const label = button.querySelector<HTMLElement>('.btn-label');
+      if (label) {
+        label.textContent = text;
+        return;
+      }
+      button.textContent = text;
+    };
+
     const clearErrors = (): void => {
       status.textContent = '';
+      status.classList.remove('is-error');
       for (const field of fields) {
         field.removeAttribute('aria-invalid');
         field.setAttribute('aria-describedby', describedBy.get(field.id) ?? '');
@@ -178,6 +197,8 @@ const t = getDictionary(Astro.locals.locale);
     const showError = (field: HTMLElement | null, message: string): void => {
       clearErrors();
       status.textContent = message;
+      // Failures are never painted in the confirmation hue.
+      status.classList.add('is-error');
       if (!field) return;
       const base = describedBy.get(field.id) ?? '';
       field.setAttribute('aria-invalid', 'true');
@@ -205,15 +226,18 @@ const t = getDictionary(Astro.locals.locale);
         const timer = copyTimers.get(row.button);
         if (timer !== undefined) window.clearTimeout(timer);
         copyTimers.delete(row.button);
-        row.button.textContent = row.button.dataset.labelIdle ?? '';
+        setButtonLabel(row.button, row.button.dataset.labelIdle ?? '');
+        row.button.dataset.copied = 'false';
       }
       resultStatus.textContent = '';
+      resultStatus.classList.remove('is-error');
     };
 
-    const showResult = (payload: CreateApiResponse, preset: string, keyFragment: string): void => {
-      const share = payload.url ?? '';
-      // The content key stays in the fragment: browsers never send it, so this is
-      // the only place the two halves meet.
+    const showResult = (payload: CreateApiResponse, preset: string, keyFragment: string): boolean => {
+      // The key is attached only to this page's origin. A URL supplied by the
+      // response is ignored, so a confused host cannot receive the fragment.
+      const share = typeof payload.token === 'string' ? shareUrl(window.location.origin, payload.token) : null;
+      if (!share) return false;
       shareRow.field.value = `${share}#${keyFragment}`;
       controlRow.field.value = payload.controlUrl ?? '';
       expiryPreset.textContent = expiryLabels[preset] ?? '';
@@ -223,11 +247,13 @@ const t = getDictionary(Astro.locals.locale);
       passwordEcho.value = password.value;
       passwordField.hidden = password.value.length === 0;
       resultStatus.textContent = '';
+      resultStatus.classList.remove('is-error');
       // The plaintext has left the page: drop it from the DOM as well.
       secret.value = '';
       form.hidden = true;
       panel.hidden = false;
       panel.focus();
+      return true;
     };
 
     form.addEventListener('submit', async (event) => {
@@ -247,20 +273,29 @@ const t = getDictionary(Astro.locals.locale);
 
       submit.setAttribute('aria-busy', 'true');
       submit.disabled = true;
-      submit.textContent = submitBusy;
+      setButtonLabel(submit, submitBusy);
 
       try {
-        // Sealed here, before anything leaves the browser: the key is generated
-        // per secret and never included in the request.
+        // Sealed here, before anything leaves the browser. The key is generated
+        // per secret. A password is mixed into that key and is not in the body.
         const key = generateContentKey();
-        const payload = await encryptPayload(secret.value, key);
-        keyFragment = encodeContentKey(key);
+        let sealingKey = key;
+        let verifier: string | undefined;
+        if (suppliedPassword.length > 0) {
+          const salt = generatePasswordSalt();
+          sealingKey = await derivePasswordKey(key, suppliedPassword, salt);
+          verifier = await encryptPayload(PASSWORD_VERIFIER_TEXT, sealingKey);
+          keyFragment = encodeShareFragment(key, salt);
+        } else {
+          keyFragment = encodeShareFragment(key);
+        }
+        const payload = await encryptPayload(secret.value, sealingKey);
 
-        const body: { payload: string; expiresIn: string; password?: string } = {
+        const body: { payload: string; expiresIn: string; verifier?: string } = {
           payload,
           expiresIn: preset,
         };
-        if (suppliedPassword.length > 0) body.password = suppliedPassword;
+        if (verifier) body.verifier = verifier;
 
         const response = await fetch('/api/secrets', {
           method: 'POST',
@@ -273,19 +308,21 @@ const t = getDictionary(Astro.locals.locale);
         if (
           !response.ok ||
           payloadBody.ok !== true ||
-          typeof payloadBody.url !== 'string' ||
+          typeof payloadBody.token !== 'string' ||
           typeof payloadBody.controlUrl !== 'string'
         ) {
           showError(null, typeof payloadBody.message === 'string' ? payloadBody.message : serverError);
           return;
         }
-        showResult(payloadBody, preset, keyFragment);
+        if (!showResult(payloadBody, preset, keyFragment)) {
+          showError(null, serverError);
+        }
       } catch {
         showError(null, serverError);
       } finally {
         submit.removeAttribute('aria-busy');
         submit.disabled = false;
-        submit.textContent = submitIdle;
+        setButtonLabel(submit, submitIdle);
       }
     });
 
@@ -298,12 +335,14 @@ const t = getDictionary(Astro.locals.locale);
         const idle = button.dataset.labelIdle ?? '';
         const done = button.dataset.labelDone ?? '';
         const failed = button.dataset.labelFailed ?? '';
-        button.textContent = copied ? done : idle;
+        button.dataset.copied = copied ? 'true' : 'false';
+        setButtonLabel(button, copied ? done : idle);
         resultStatus.textContent = copied ? done : failed;
         copyTimers.set(
           button,
           window.setTimeout(() => {
-            button.textContent = idle;
+            setButtonLabel(button, idle);
+            button.dataset.copied = 'false';
             if (resultStatus.textContent === done || resultStatus.textContent === failed) {
               resultStatus.textContent = '';
             }

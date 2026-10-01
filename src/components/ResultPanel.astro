@@ -1,5 +1,6 @@
 ---
 import { getDictionary } from '../lib/i18n.ts';
+import Icon from './Icon.astro';
 import Panel from './Panel.astro';
 
 const locale = Astro.locals.locale;
@@ -8,7 +9,7 @@ const t = getDictionary(locale);
 
 <Panel id="result-panel" heading={t.result.title} headingId="result-title" hidden>
   <div class="field">
-    <label for="result-link">{t.result.linkLabel}</label>
+    <label for="result-link"><Icon name="key" />{t.result.linkLabel}</label>
     <div class="copy-row">
       <input
         id="result-link"
@@ -17,23 +18,30 @@ const t = getDictionary(locale);
         readonly
         spellcheck="false"
         autocomplete="off"
+        translate="no"
         aria-describedby="result-note"
       />
       <button
         type="button"
-        class="btn btn-ghost"
+        class="btn btn-ghost btn-copy"
         id="result-copy"
         data-label-idle={t.result.copy}
         data-label-done={t.result.copied}
         data-label-failed={t.result.copyFailed}
       >
-        {t.result.copy}
+        <Icon name="copy" class="icon icon-copy" />
+        <Icon name="check" class="icon icon-done" />
+        <span class="btn-label">{t.result.copy}</span>
       </button>
     </div>
   </div>
 
-  <div class="field">
-    <label for="result-control-link">{t.result.controlLabel}</label>
+  <!--
+    The control link can destroy the secret, so it never looks like the
+    one-time link: danger label, shield mark and a line saying what it does.
+  -->
+  <div class="field field-kill" id="result-control-field">
+    <label for="result-control-link"><Icon name="shield" />{t.result.controlLabel}</label>
     <div class="copy-row">
       <input
         id="result-control-link"
@@ -42,49 +50,75 @@ const t = getDictionary(locale);
         readonly
         spellcheck="false"
         autocomplete="off"
+        translate="no"
+        aria-describedby="result-control-hint"
       />
       <button
         type="button"
-        class="btn btn-ghost"
+        class="btn btn-ghost btn-copy"
         id="result-control-copy"
         data-label-idle={t.result.copy}
         data-label-done={t.result.copied}
         data-label-failed={t.result.copyFailed}
       >
-        {t.result.copy}
+        <Icon name="copy" class="icon icon-copy" />
+        <Icon name="check" class="icon icon-done" />
+        <span class="btn-label">{t.result.copy}</span>
       </button>
     </div>
+    <p class="note" id="result-control-hint">{t.result.controlHint}</p>
   </div>
 
-  <!-- Only shown when a password was set: it leaves the form with the secret. -->
+  <!-- Only shown when a password was set: it leaves the form with the secret.
+       Masked like the input it came from; the toggle reveals it on request.
+       The reveal is wired by the generic script in PasswordField.astro, which
+       CreateForm renders on this same page. -->
   <div class="field" id="result-password-field" hidden>
-    <label for="result-password">{t.result.passwordLabel}</label>
+    <div class="field-head">
+      <label for="result-password"><Icon name="lock" />{t.result.passwordLabel}</label>
+      <button
+        type="button"
+        class="btn btn-ghost"
+        id="result-password-toggle"
+        data-password-toggle="result-password"
+        aria-controls="result-password"
+      >
+        {t.result.passwordShow}
+      </button>
+    </div>
     <div class="copy-row">
       <input
         id="result-password"
         class="input-mono"
-        type="text"
+        type="password"
         readonly
         spellcheck="false"
         autocomplete="off"
+        translate="no"
+        aria-describedby="note-password-echo"
+        data-password-label-show={t.result.passwordShow}
+        data-password-label-hide={t.result.passwordHide}
       />
       <button
         type="button"
-        class="btn btn-ghost"
+        class="btn btn-ghost btn-copy"
         id="result-password-copy"
         data-label-idle={t.result.copy}
         data-label-done={t.result.copied}
         data-label-failed={t.result.copyFailed}
       >
-        {t.result.copy}
+        <Icon name="copy" class="icon icon-copy" />
+        <Icon name="check" class="icon icon-done" />
+        <span class="btn-label">{t.result.copy}</span>
       </button>
     </div>
+    <p class="note" id="note-password-echo">{t.create.notePassword}</p>
   </div>
 
   <p class="meta" id="result-expiry">
     <span class="meta-label">{t.result.expires}</span>
     <span id="result-expiry-preset"></span>
-    <span id="result-expiry-value" data-locale={locale}></span>
+    <span id="result-expiry-value" class="meta-value" data-locale={locale}></span>
   </p>
 
   <p class="note" id="result-note">{t.result.noteKeyInFragment}</p>
