@@ -7,7 +7,7 @@
 import type { APIRoute } from 'astro';
 import { errorResponse, jsonResponse } from '../../../lib/http.ts';
 import { isValidTokenShape } from '../../../lib/crypto.ts';
-import { revealSecret } from '../../../lib/secrets.ts';
+import { revealSecret, MAX_REVEAL_BODY_BYTES } from '../../../lib/secrets.ts';
 import { guardRequest, readJsonBody } from '../../../lib/api-guard.ts';
 
 export const prerender = false;
@@ -17,7 +17,7 @@ export const POST: APIRoute = async (context) => {
   const guard = await guardRequest(context.request, locale, context.locals.peerAddress, 'reveal');
   if (!guard.ok) return guard.response;
 
-  const body = await readJsonBody(context.request);
+  const body = await readJsonBody(context.request, MAX_REVEAL_BODY_BYTES);
   if (!body) return errorResponse(locale, 'badRequest', 400);
 
   const token = typeof body.token === 'string' ? body.token : '';
@@ -30,6 +30,11 @@ export const POST: APIRoute = async (context) => {
     if (result.reason === 'bad_password') {
       // 403 rather than 404: the secret exists, the credential does not match.
       return errorResponse(locale, 'badPassword', 403);
+    }
+    if (result.reason === 'undecryptable') {
+      // The link is still there and the row was not consumed, so 404 would be a
+      // lie that outlives the outage: once the key is back the reveal succeeds.
+      return errorResponse(locale, 'serverError', 500);
     }
     // One response for missing, expired and already consumed secrets.
     return errorResponse(locale, 'unavailable', 404);

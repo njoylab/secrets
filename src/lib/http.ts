@@ -3,6 +3,7 @@
  * cross-origin POST protection.
  */
 import { getDictionary, type ErrorKey, type Locale } from './i18n.ts';
+import { normalizeAddress } from './address.mjs';
 
 /** Internal header set by server.mjs with the IP it resolved. Untrusted from clients. */
 export const RESOLVED_IP_HEADER = 'x-resolved-client-ip';
@@ -48,17 +49,13 @@ export function errorResponse(
   );
 }
 
-function normalizeAddress(value: string): string {
-  // Strip IPv6 brackets and any port suffix so proxies can be matched.
-  const trimmed = value.trim();
-  if (trimmed.startsWith('[')) {
-    const end = trimmed.indexOf(']');
-    return end === -1 ? trimmed : trimmed.slice(1, end);
-  }
-  const colonCount = trimmed.split(':').length - 1;
-  return colonCount === 1 ? trimmed.slice(0, trimmed.lastIndexOf(':')) : trimmed;
-}
-
+/**
+ * A peer matches a configured proxy only on a fully equal canonical address.
+ *
+ * The configured list goes through the same normalization as the peer, so
+ * `::ffff:127.0.0.1` and `127.0.0.1` are one address rather than two, and a
+ * shared prefix never grants trust.
+ */
 export function isTrustedProxy(address: string, trustedProxies: readonly string[]): boolean {
   const normalized = normalizeAddress(address);
   return trustedProxies.some((proxy) => normalizeAddress(proxy) === normalized);

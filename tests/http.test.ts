@@ -295,6 +295,31 @@ describe('isTrustedProxy', () => {
   });
 });
 
+describe('isTrustedProxy: IPv4 mapped in IPv6', () => {
+  // A dual stack listener reports its peers in the mapped form, so a proxy
+  // configured as plain IPv4 must still be recognised.
+  it('matches a mapped peer against a plain IPv4 entry', () => {
+    expect(isTrustedProxy('::ffff:127.0.0.1', ['127.0.0.1'])).toBe(true);
+    expect(isTrustedProxy('::FFFF:127.0.0.1', ['127.0.0.1'])).toBe(true);
+    expect(isTrustedProxy('[::ffff:127.0.0.1]:41234', ['127.0.0.1'])).toBe(true);
+  });
+
+  it('matches a plain IPv4 peer against a mapped entry', () => {
+    expect(isTrustedProxy('127.0.0.1', ['::ffff:127.0.0.1'])).toBe(true);
+    expect(isTrustedProxy('127.0.0.1:41234', ['::FFFF:127.0.0.1'])).toBe(true);
+  });
+
+  it('keeps two different mapped addresses distinct', () => {
+    expect(isTrustedProxy('::ffff:10.0.0.1', ['10.0.0.2'])).toBe(false);
+    expect(isTrustedProxy('10.0.0.1', ['::ffff:10.0.0.2'])).toBe(false);
+  });
+
+  it('does not rewrite a plain IPv6 address', () => {
+    expect(isTrustedProxy('2001:db8::1', ['2001:DB8::1'])).toBe(true);
+    expect(isTrustedProxy('::1', ['127.0.0.1'])).toBe(false);
+  });
+});
+
 describe('resolveClientIp', () => {
   const trusted = ['192.0.2.10', '2001:db8::1'];
 
@@ -342,6 +367,18 @@ describe('resolveClientIp', () => {
     expect(resolveClientIp(header({}), '2001:db8::1', trusted)).toBe('2001:db8::1');
     expect(resolveClientIp(header({}), ' 203.0.113.7:443 ', [])).toBe('203.0.113.7');
     expect(resolveClientIp(header({ 'x-forwarded-for': ' 203.0.113.8 ' }), '192.0.2.10:1', trusted)).toBe('203.0.113.8');
+  });
+
+  it('handles IPv4 mapped addresses when resolving the chain', () => {
+    // Peer is the trusted proxy, reported as a mapped address. The XFF contains
+    // a plain IPv4 client. The canonical form must identify the peer as trusted
+    // and return the client.
+    expect(resolveClientIp(header({ 'x-forwarded-for': '203.0.113.7' }), '::ffff:192.0.2.10', trusted)).toBe('203.0.113.7');
+    expect(resolveClientIp(header({ 'x-forwarded-for': '::ffff:203.0.113.7' }), '192.0.2.10', trusted)).toBe('203.0.113.7');
+    expect(resolveClientIp(header({ 'x-forwarded-for': '::ffff:203.0.113.7, ::ffff:192.0.2.10' }), '::ffff:192.0.2.10', trusted)).toBe('203.0.113.7');
+    expect(resolveClientIp(header({ 'x-forwarded-for': '::ffff:198.51.100.5, ::ffff:192.0.2.10, 2001:db8::1' }), '2001:db8::1', trusted)).toBe('198.51.100.5');
+    // The rightmost untrusted hop wins even when a client claims to be a proxy.
+    expect(resolveClientIp(header({ 'x-forwarded-for': '::ffff:192.0.2.10, ::ffff:203.0.113.9' }), '::ffff:192.0.2.10', trusted)).toBe('203.0.113.9');
   });
 
   it('reports unknown for an empty or missing peer', () => {

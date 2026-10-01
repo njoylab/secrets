@@ -15,6 +15,9 @@
 import http from 'node:http';
 import https from 'node:https';
 import fs from 'node:fs';
+// Shared with src/lib/http.ts: the copy that decides whether a peer is trusted
+// must be the same one the application uses.
+import { normalizeAddress } from './src/lib/address.mjs';
 
 /** Internal header carrying the IP resolved here. Never accepted from a client. */
 const RESOLVED_IP_HEADER = 'x-resolved-client-ip';
@@ -26,18 +29,6 @@ function readList(raw) {
     .split(',')
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
-}
-
-/** Strip IPv6 brackets and any port suffix so proxy entries can be compared directly. */
-function normalizeAddress(value) {
-  const trimmed = String(value ?? '').trim();
-  if (trimmed.startsWith('[')) {
-    const end = trimmed.indexOf(']');
-    return end === -1 ? trimmed : trimmed.slice(1, end);
-  }
-  return trimmed.includes(':') && trimmed.split(':').length === 2
-    ? trimmed.slice(0, trimmed.lastIndexOf(':'))
-    : trimmed;
 }
 
 const trustedProxies = new Set(readList(process.env.TRUSTED_PROXIES).map(normalizeAddress));
@@ -92,13 +83,15 @@ process.env.ASTRO_NODE_AUTOSTART = 'disabled';
 const { handler, options } = await import('./dist/server/entry.mjs');
 
 const port = process.env.PORT ? Number.parseInt(process.env.PORT, 10) : (options.port ?? 4321);
-const host = process.env.HOST ?? '0.0.0.0';
+// Loopback by default: the process is meant to sit behind a local reverse proxy
+// that terminates TLS, and binding every interface would publish it directly.
+const host = process.env.HOST ?? '127.0.0.1';
 
 const server =
   process.env.SERVER_CERT_PATH && process.env.SERVER_KEY_PATH
     ? https.createServer(
         {
-          key: fs.readFileSync(process.env.SERVER_CERT_PATH),
+          key: fs.readFileSync(process.env.SERVER_KEY_PATH),
           cert: fs.readFileSync(process.env.SERVER_CERT_PATH),
         },
         (req, res) => {

@@ -5,10 +5,13 @@
  */
 import { Buffer } from 'node:buffer';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { readJsonBody } from '../src/lib/api-guard.ts';
 import {
   DEFAULT_EXPIRY_DAYS,
+  MAX_CREATE_BODY_BYTES,
   MAX_EXPIRY_DAYS,
   MAX_PASSWORD_LENGTH,
+  MAX_REVEAL_BODY_BYTES,
   MAX_SECRET_BYTES,
   MIN_EXPIRY_DAYS,
   createSecret,
@@ -17,6 +20,17 @@ import {
 import { captureSecretError, fetchSecretRow, payloadOfBytes, resetEnv, utf8 } from './helpers.ts';
 
 const DAY = 24 * 60 * 60 * 1000;
+
+/** Worst case for JSON: a control character expands to a six byte escape. */
+const ESCAPED_UNIT = '\u0001';
+
+function jsonPost(body: unknown): Request {
+  return new Request('https://secrets.example.com/api/secrets', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
 
 beforeEach(async () => {
   await resetEnv();
@@ -70,6 +84,80 @@ describe('secret size', () => {
     const payload = '😀'.repeat(Math.floor(MAX_SECRET_BYTES / 4) + 1);
     expect(Buffer.byteLength(payload, 'utf8')).toBeGreaterThan(MAX_SECRET_BYTES);
     const error = await captureSecretError(createSecret({ secret: payload, expiresInDays: 7 }));
+    expect(error.code).toBe('secretTooLong');
+  });
+});
+
+describe('request body size', () => {
+  it('accepts a body whose JSON escapes push it past the 64 KiB default', async () => {
+    // Under 50 KiB of text, over 64 KiB once serialized: a legitimate secret
+    // that the old default rejected with badRequest.
+    const payload = ESCAPED_UNIT.repeat(MAX_SECRET_BYTES);
+    expect(Buffer.byteLength(payload, 'utf8')).toBe(MAX_SECRET_BYTES);
+    const request = jsonPost({ secret: payload, expiresInDays: 7 });
+    expect(Buffer.byteLength(await request.clone().text(), 'utf8')).toBeGreaterThan(64 * 1024);
+
+    const body = await readJsonBody(request, MAX_CREATE_BODY_BYTES);
+    expect(body).not.toBeNull();
+    expect(body?.secret).toBe(payload);
+
+    // The same payload survives creation and reveal unchanged.
+    const created = await createSecret({ secret: payload, expiresInDays: 7 });
+    const result = await revealSecret(created.token);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('secret was not revealed');
+    expect(utf8(result.secret).equals(utf8(payload))).toBe(true);
+  });
+
+  it('accepts quotes and backslashes, which expand two bytes each', async () => {
+    const payload = '"\\'.repeat(Math.floor(MAX_SECRET_BYTES / 2));
+    const body = await readJsonBody(jsonPost({ secret: payload, expiresInDays: 7 }), MAX_CREATE_BODY_BYTES);
+    expect(body?.secret).toBe(payload);
+
+    const created = await createSecret({ secret: payload, expiresInDays: 7 });
+    const result = await revealSecret(created.token);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('secret was not revealed');
+    expect(result.secret).toBe(payload);
+  });
+
+  it('rejects a body one byte over the creation ceiling, before reading it', async () => {
+    const payload = ESCAPED_UNIT.repeat(MAX_SECRET_BYTES);
+    const oversized = jsonPost({ secret: payload, expiresInDays: 7, padding: 'x'.repeat(MAX_CREATE_BODY_BYTES) });
+    expect(Buffer.byteLength(await oversized.clone().text(), 'utf8')).toBeGreaterThan(MAX_CREATE_BODY_BYTES);
+    expect(await readJsonBody(oversized, MAX_CREATE_BODY_BYTES)).toBeNull();
+    // A declared Content-Length over the ceiling is refused without a read.
+    const declared = new Request('https://secrets.example.com/api/secrets', {
+      method: 'POST',
+      headers: { 'content-length': String(MAX_CREATE_BODY_BYTES + 1) },
+      body: JSON.stringify({ secret: payload }),
+    });
+    expect(await readJsonBody(declared, MAX_CREATE_BODY_BYTES)).toBeNull();
+  });
+
+  it('keeps the global default small, so other endpoints do not inherit the creation size', async () => {
+    const payload = ESCAPED_UNIT.repeat(MAX_SECRET_BYTES);
+    expect(await readJsonBody(jsonPost({ secret: payload, expiresInDays: 7 }))).toBeNull();
+  });
+
+  it('keeps a small ceiling on the reveal body', () => {
+    // A reveal carries a 43 character token and a password, never the secret.
+    expect(MAX_REVEAL_BODY_BYTES).toBeLessThan(MAX_CREATE_BODY_BYTES);
+    expect(MAX_REVEAL_BODY_BYTES).toBe((43 + MAX_PASSWORD_LENGTH) * 6 + 256);
+    expect(MAX_REVEAL_BODY_BYTES).toBeLessThan(8 * 1024);
+  });
+
+  it('still reports secretTooLong for a decoded secret over 50 KiB', async () => {
+    // Fits in the creation ceiling, so it must fail validation, not parsing.
+    const payload = ESCAPED_UNIT.repeat(MAX_SECRET_BYTES + 1);
+    expect(Buffer.byteLength(payload, 'utf8')).toBe(MAX_SECRET_BYTES + 1);
+    expect(Buffer.byteLength(JSON.stringify({ secret: payload }), 'utf8')).toBeLessThan(MAX_CREATE_BODY_BYTES);
+
+    const body = await readJsonBody(jsonPost({ secret: payload, expiresInDays: 7 }), MAX_CREATE_BODY_BYTES);
+    expect(body?.secret).toBe(payload);
+    const error = await captureSecretError(
+      createSecret({ secret: body?.secret as string, expiresInDays: 7 }),
+    );
     expect(error.code).toBe('secretTooLong');
   });
 });

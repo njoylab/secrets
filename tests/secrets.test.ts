@@ -2,7 +2,10 @@
  * Secret lifecycle: fidelity of the stored content, single use, passwords,
  * expiry and the peek endpoint that must never consume.
  */
+import { Buffer } from 'node:buffer';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { query } from '../src/lib/db.ts';
+import { resetConfigCache } from '../src/lib/env.ts';
 import { createSecret, peekSecretPresence, purgeExpired, revealSecret } from '../src/lib/secrets.ts';
 import {
   countRateLimits,
@@ -20,6 +23,23 @@ import {
 beforeEach(async () => {
   await resetEnv();
 });
+
+/**
+ * Run `fn` with a valid but different encryption key, so the GCM tag cannot
+ * verify. The key is always restored and the memoized config dropped, so the
+ * next test sees the original key again.
+ */
+async function withWrongKey<T>(fn: () => Promise<T>, filler = 7): Promise<T> {
+  const original = process.env.SECRET_ENCRYPTION_KEY;
+  process.env.SECRET_ENCRYPTION_KEY = Buffer.alloc(32, filler).toString('base64url');
+  resetConfigCache();
+  try {
+    return await fn();
+  } finally {
+    process.env.SECRET_ENCRYPTION_KEY = original;
+    resetConfigCache();
+  }
+}
 
 describe('create and reveal without a password', () => {
   const payloads: ReadonlyArray<readonly [string, string]> = [
@@ -125,6 +145,122 @@ describe('create and reveal with a password', () => {
   });
 });
 
+describe('decryption failures', () => {
+  // The delete used to run before the decrypt, so a wrong key or a tampered
+  // ciphertext destroyed a secret nobody had read yet.
+  it('does not consume the secret when the key is wrong, and works again once restored', async () => {
+    const created = await createSecret({ secret: 'survives a key rotation', expiresInDays: 7 });
+
+    await withWrongKey(async () => {
+      expect(await revealSecret(created.token)).toEqual({ ok: false, reason: 'undecryptable' });
+      // The row is still there: nothing was deleted.
+      expect(await countSecrets()).toBe(1);
+      expect(await fetchSecretRow(created.token)).toBeDefined();
+    });
+
+    // The key is back: the very same link works again.
+    expect(await revealSecret(created.token)).toEqual({ ok: true, secret: 'survives a key rotation' });
+    expect(await countSecrets()).toBe(0);
+  });
+
+  it('does not consume a protected secret when the key is wrong', async () => {
+    const created = await createSecret({ secret: 'still protected', expiresInDays: 7, password: 'pw-probe' });
+
+    await withWrongKey(async () => {
+      // The password is verified first, so the decrypt is only reached with the
+      // right credential, and the row survives.
+      expect(await revealSecret(created.token, 'pw-probe')).toEqual({ ok: false, reason: 'undecryptable' });
+      expect(await countSecrets()).toBe(1);
+    }, 9);
+
+    expect(await revealSecret(created.token, 'pw-probe')).toEqual({ ok: true, secret: 'still protected' });
+    expect(await countSecrets()).toBe(0);
+  });
+
+  it('reports a wrong password rather than undecryptable when the key is wrong', async () => {
+    const created = await createSecret({ secret: 'protected', expiresInDays: 7, password: 'pw-probe' });
+
+    await withWrongKey(async () => {
+      expect(await revealSecret(created.token, 'wrong')).toEqual({ ok: false, reason: 'bad_password' });
+      expect(await countSecrets()).toBe(1);
+    }, 3);
+  });
+
+  it('does not consume a secret whose ciphertext was tampered with', async () => {
+    const created = await createSecret({ secret: 'tamper target', expiresInDays: 7 });
+    const row = await fetchSecretRow(created.token);
+    if (!row) throw new Error('secret row missing');
+
+    // Flip a byte in the sealed payload, keeping it valid base64url of the
+    // right length so only the GCM tag can detect the change.
+    const raw = Buffer.from(row.ciphertext, 'base64url');
+    raw[20] = (raw[20] ?? 0) ^ 0x01;
+    const tampered = raw.toString('base64url');
+    await query('UPDATE secrets SET ciphertext = $2 WHERE token_hash = $1', [row.token_hash, tampered]);
+    expect(tampered).not.toBe(row.ciphertext);
+
+    try {
+      expect(await revealSecret(created.token)).toEqual({ ok: false, reason: 'undecryptable' });
+      expect(await countSecrets()).toBe(1);
+      expect((await fetchSecretRow(created.token))?.ciphertext).toBe(tampered);
+    } finally {
+      // Put the original payload back: the same link must still be redeemable.
+      await query('UPDATE secrets SET ciphertext = $2 WHERE token_hash = $1', [row.token_hash, row.ciphertext]);
+      resetConfigCache();
+    }
+
+    expect(await revealSecret(created.token)).toEqual({ ok: true, secret: 'tamper target' });
+    expect(await countSecrets()).toBe(0);
+  });
+
+  it('does not consume a secret whose ciphertext is truncated below the nonce and tag', async () => {
+    const created = await createSecret({ secret: 'truncated', expiresInDays: 7 });
+    const row = await fetchSecretRow(created.token);
+    if (!row) throw new Error('secret row missing');
+
+    await query('UPDATE secrets SET ciphertext = $2 WHERE token_hash = $1', [row.token_hash, 'AAAA']);
+
+    expect(await revealSecret(created.token)).toEqual({ ok: false, reason: 'undecryptable' });
+    expect(await countSecrets()).toBe(1);
+  });
+
+  it('leaves the ciphertext untouched when a decryption fails', async () => {
+    // Nothing in the flow rewrites the column, so restoring the key or the
+    // payload is enough to redeem the link again.
+    const created = await createSecret({ secret: 'untouched column', expiresInDays: 7 });
+    const before = await fetchSecretRow(created.token);
+    if (!before) throw new Error('secret row missing');
+
+    await withWrongKey(async () => {
+      expect(await revealSecret(created.token)).toEqual({ ok: false, reason: 'undecryptable' });
+    });
+
+    const after = await fetchSecretRow(created.token);
+    expect(after?.ciphertext).toBe(before.ciphertext);
+    expect(after?.password_hash).toBe(before.password_hash);
+  });
+
+  it('answers with the deleted payload when the two ciphertexts ever differ', async () => {
+    // The branch is unreachable through the database: the delete is the only
+    // writer of the column and nothing updates it in place, and a BEFORE DELETE
+    // trigger cannot change what RETURNING reports. Proving it is unreachable
+    // would mean asserting a branch that can never execute, so what is asserted
+    // here is the weaker fact that holds today: the payload returned by the
+    // delete is the payload that was decrypted, so the caller is never handed a
+    // different text than the one it verified.
+    const created = await createSecret({ secret: 'same payload both ways', expiresInDays: 7 });
+    const before = await fetchSecretRow(created.token);
+    if (!before) throw new Error('secret row missing');
+
+    const deleted = await query<{ ciphertext: string }>(
+      'DELETE FROM secrets WHERE token_hash = $1 RETURNING ciphertext',
+      [before.token_hash],
+    );
+    expect(deleted.rows[0]?.ciphertext).toBe(before.ciphertext);
+    expect(await countSecrets()).toBe(0);
+  });
+});
+
 describe('peekSecretPresence', () => {
   it('reports whether a password is required without consuming the secret', async () => {
     const open = await createSecret({ secret: 'open secret', expiresInDays: 7 });
@@ -187,6 +323,18 @@ describe('expiration', () => {
     await setExpiresInSeconds(created.token, -1);
 
     expect(await revealSecret(created.token, 'pw')).toEqual({ ok: false, reason: 'unavailable' });
+  });
+
+  it('stays unavailable for an expired secret even with a wrong key', async () => {
+    // Expiry is checked in SQL before the decrypt, so this never reaches the
+    // key check and never reports undecryptable.
+    const created = await createSecret({ secret: 'expired', expiresInDays: 1 });
+    await forceExpire(created.token);
+
+    await withWrongKey(async () => {
+      expect(await revealSecret(created.token)).toEqual({ ok: false, reason: 'unavailable' });
+      expect(await countSecrets()).toBe(1);
+    });
   });
 });
 

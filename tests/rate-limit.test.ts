@@ -49,9 +49,11 @@ describe('consumeRateLimit: the budget', () => {
     const refused = await consumeRateLimit(CREATE_BUCKET, 'subject-a', RULE);
     expect(refused.allowed).toBe(false);
     expect(refused.remaining).toBe(0);
-    // Refused calls still count, so a flood cannot buy its way back in.
+    // The counter is already at the cap, so further refusals change nothing and
+    // the flood cannot buy its way back in.
     const stillRefused = await consumeRateLimit(CREATE_BUCKET, 'subject-a', RULE);
     expect(stillRefused.allowed).toBe(false);
+    expect((await fetchRateLimitRows(CREATE_BUCKET, 'subject-a'))[0]?.hits).toBe(RULE.max + 1);
   });
 
   it('grants an exact budget under concurrent calls', async () => {
@@ -64,7 +66,47 @@ describe('consumeRateLimit: the budget', () => {
     expect(results.filter((result) => !result.allowed)).toHaveLength(calls - RULE.max);
     const rows = await fetchRateLimitRows(CREATE_BUCKET, 'subject-race');
     expect(rows).toHaveLength(1);
-    expect(rows[0]?.hits).toBe(calls);
+    // The counter stops one past the cap: a flood cannot inflate the row, and
+    // stopping at max instead would leave the subject allowed for the rest of
+    // the window.
+    expect(rows[0]?.hits).toBe(RULE.max + 1);
+  });
+
+  it('keeps refusing after the cap, without reopening the window', async () => {
+    for (let call = 0; call < RULE.max + 5; call += 1) {
+      await consumeRateLimit(CREATE_BUCKET, 'subject-capped', RULE);
+    }
+    const ageBefore = await windowAge(CREATE_BUCKET, 'subject-capped');
+    expect((await fetchRateLimitRows(CREATE_BUCKET, 'subject-capped'))[0]?.hits).toBe(RULE.max + 1);
+
+    const refused = await consumeRateLimit(CREATE_BUCKET, 'subject-capped', RULE);
+    expect(refused.allowed).toBe(false);
+    expect(refused.remaining).toBe(0);
+    expect((await fetchRateLimitRows(CREATE_BUCKET, 'subject-capped'))[0]?.hits).toBe(RULE.max + 1);
+    // The refusal did not move the window, so the budget is still exhausted.
+    expect(await windowAge(CREATE_BUCKET, 'subject-capped')).toBeLessThan(ageBefore + 1);
+  });
+
+  it('reports only what is left of the window on a refusal', async () => {
+    // A window already three quarters spent: the caller must be told to come
+    // back in seconds, not to wait out the whole window again.
+    await insertRateLimitRow(CREATE_BUCKET, 'subject-partial', RULE.windowSeconds * 0.75, RULE.max);
+
+    const refused = await consumeRateLimit(CREATE_BUCKET, 'subject-partial', RULE);
+    expect(refused.allowed).toBe(false);
+    expect(refused.retryAfterSeconds).toBeGreaterThan(0);
+    expect(refused.retryAfterSeconds).toBeLessThan(RULE.windowSeconds);
+    expect(refused.retryAfterSeconds).toBeLessThanOrEqual(Math.ceil(RULE.windowSeconds * 0.25) + 1);
+  });
+
+  it('never reports a retry delay below one second on a refusal', async () => {
+    // The window is still open but has under a second left, so the remaining
+    // time truncates to zero. A zero delay would invite an immediate hot loop.
+    await insertRateLimitRow(CREATE_BUCKET, 'subject-expiring', RULE.windowSeconds - 0.5, RULE.max);
+
+    const refused = await consumeRateLimit(CREATE_BUCKET, 'subject-expiring', RULE);
+    expect(refused.allowed).toBe(false);
+    expect(refused.retryAfterSeconds).toBe(1);
   });
 });
 

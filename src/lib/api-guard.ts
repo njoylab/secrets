@@ -43,7 +43,14 @@ export async function guardRequest(
   return { ok: true, context: { request, locale, clientIp } };
 }
 
-/** Bound the request body before JSON parsing to keep memory usage predictable. */
+/**
+ * Bound the request body before JSON parsing to keep memory usage predictable.
+ *
+ * The default is deliberately the small cap: each route that accepts larger
+ * input passes its own ceiling, so raising it here would loosen every endpoint
+ * at once. `Content-Length` is checked first, so an oversized body is refused
+ * without ever being read into memory.
+ */
 export async function readJsonBody(
   request: Request,
   maxBytes = 64 * 1024,

@@ -10,6 +10,7 @@ import { Buffer } from 'node:buffer';
 import { query } from './db.ts';
 import { getConfig } from './env.ts';
 import {
+  TOKEN_LENGTH,
   decryptSecret,
   encryptSecret,
   generateToken,
@@ -24,6 +25,32 @@ export const MIN_EXPIRY_DAYS = 1;
 export const MAX_EXPIRY_DAYS = 30;
 export const DEFAULT_EXPIRY_DAYS = 7;
 export const MAX_PASSWORD_LENGTH = 512;
+
+/**
+ * Worst case size of a JSON field relative to its decoded text.
+ *
+ * `JSON.stringify` escapes quotes, backslashes and control characters, and a
+ * control character becomes a six byte `\uXXXX` sequence. A 50 KiB secret made
+ * of control characters is therefore 300 KiB on the wire, so a body cap sized for
+ * plain text would answer `badRequest` to a perfectly legitimate secret. The
+ * factor is applied to the decoded limits, which is where the real limits live.
+ */
+const JSON_ESCAPE_FACTOR = 6;
+
+/** Room for the field names, punctuation, the expiry number and any slack. */
+const JSON_ENVELOPE_BYTES = 256;
+
+/** Body ceiling for `POST /api/secrets`: a full size secret plus a full size password. */
+export const MAX_CREATE_BODY_BYTES =
+  (MAX_SECRET_BYTES + MAX_PASSWORD_LENGTH) * JSON_ESCAPE_FACTOR + JSON_ENVELOPE_BYTES;
+
+/**
+ * Body ceiling for `POST /api/secrets/reveal`: a token and a password, never
+ * the secret. Kept small on purpose so a reveal request cannot be used to push
+ * megabytes of arbitrary content into the process.
+ */
+export const MAX_REVEAL_BODY_BYTES =
+  (TOKEN_LENGTH + MAX_PASSWORD_LENGTH) * JSON_ESCAPE_FACTOR + JSON_ENVELOPE_BYTES;
 
 export type SecretErrorCode =
   | 'secretRequired'
@@ -52,7 +79,7 @@ export interface CreatedSecret {
   readonly expiresAt: Date;
 }
 
-export type RevealFailure = 'unavailable' | 'bad_password';
+export type RevealFailure = 'unavailable' | 'bad_password' | 'undecryptable';
 
 export type RevealResult =
   | { readonly ok: true; readonly secret: string }
@@ -150,8 +177,16 @@ export async function peekSecretPresence(token: string): Promise<{ requiresPassw
  * Reveal a secret exactly once.
  *
  * Sequence: read the row without a lock, verify the password outside any
- * transaction, then attempt the atomic conditional delete. A failing password
- * never reaches the delete, so it cannot consume the secret.
+ * transaction, decrypt the ciphertext that was just read, and only then attempt
+ * the atomic conditional delete.
+ *
+ * Decryption comes before the delete on purpose. A wrong key or a corrupted
+ * ciphertext makes the GCM tag fail, and deleting first would destroy a secret
+ * that nobody has read yet. A failure here is reported as `undecryptable` and
+ * the row is left in place: restoring the key makes the link work again.
+ *
+ * A failing password never reaches the decrypt or the delete, so it cannot
+ * consume the secret.
  */
 export async function revealSecret(token: string, password?: string): Promise<RevealResult> {
   if (!isValidTokenShape(token)) return { ok: false, reason: 'unavailable' };
@@ -175,6 +210,15 @@ export async function revealSecret(token: string, password?: string): Promise<Re
     }
   }
 
+  // A wrong key or a tampered payload lands here. Nothing is logged: the
+  // ciphertext, the token, the password and the plaintext are all off limits.
+  let plaintext: string;
+  try {
+    plaintext = decryptSecret(candidate.ciphertext, getConfig().encryptionKey);
+  } catch {
+    return { ok: false, reason: 'undecryptable' };
+  }
+
   const { rows: consumed } = await query<{ ciphertext: string }>(
     `DELETE FROM secrets
       WHERE token_hash = $1
@@ -184,10 +228,24 @@ export async function revealSecret(token: string, password?: string): Promise<Re
   );
   const row = consumed[0];
   // Zero rows means a concurrent request won the race, or the secret expired
-  // between the read and the delete. Either way this caller gets nothing.
+  // between the read and the delete. Either way this caller gets nothing and the
+  // plaintext it already holds is discarded.
   if (!row) return { ok: false, reason: 'unavailable' };
 
-  return { ok: true, secret: decryptSecret(row.ciphertext, getConfig().encryptionKey) };
+  if (row.ciphertext !== candidate.ciphertext) {
+    // Unreachable today: the delete is the only writer of this column and
+    // nothing updates it in place, so the two values are always the same string.
+    // The row is gone either way, so refusing here would report a consumed
+    // secret as unavailable and destroy it. The deleted payload is the one this
+    // caller has just consumed, so decrypt that instead of discarding it.
+    try {
+      return { ok: true, secret: decryptSecret(row.ciphertext, getConfig().encryptionKey) };
+    } catch {
+      return { ok: false, reason: 'undecryptable' };
+    }
+  }
+
+  return { ok: true, secret: plaintext };
 }
 
 /** Remove expired secrets and stale rate limit counters. */

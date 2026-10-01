@@ -40,6 +40,9 @@ function scrypt(
 
 export const TOKEN_BYTES = 32;
 
+/** 32 random bytes encode to exactly 43 base64url characters. */
+export const TOKEN_LENGTH = 43;
+
 const NONCE_BYTES = 12;
 const AUTH_TAG_BYTES = 16;
 const SALT_BYTES = 16;
@@ -62,7 +65,7 @@ export function hashToken(token: string): string {
 
 /** 32 random bytes encode to exactly 43 base64url characters; reject anything else early. */
 export function isValidTokenShape(token: string): boolean {
-  return /^[A-Za-z0-9_-]{43}$/.test(token);
+  return new RegExp(`^[A-Za-z0-9_-]{${TOKEN_LENGTH}}$`).test(token);
 }
 
 /** Seal plaintext as base64url(nonce || ciphertext || authTag). */

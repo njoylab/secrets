@@ -7,7 +7,7 @@
 import type { APIRoute } from 'astro';
 import { getConfig } from '../../../lib/env.ts';
 import { errorResponse, jsonResponse } from '../../../lib/http.ts';
-import { createSecret, SecretValidationError } from '../../../lib/secrets.ts';
+import { createSecret, MAX_CREATE_BODY_BYTES, SecretValidationError } from '../../../lib/secrets.ts';
 import { guardRequest, readJsonBody } from '../../../lib/api-guard.ts';
 
 export const prerender = false;
@@ -17,7 +17,7 @@ export const POST: APIRoute = async (context) => {
   const guard = await guardRequest(context.request, locale, context.locals.peerAddress, 'create');
   if (!guard.ok) return guard.response;
 
-  const body = await readJsonBody(context.request);
+  const body = await readJsonBody(context.request, MAX_CREATE_BODY_BYTES);
   if (!body) return errorResponse(locale, 'badRequest', 400);
 
   try {

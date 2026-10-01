@@ -4,9 +4,11 @@
  * These are the tests that matter most: a one-time secret must be readable by
  * exactly one caller no matter how many requests arrive at the same instant.
  */
+import { Buffer } from 'node:buffer';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { hashToken } from '../src/lib/crypto.ts';
 import { withClient } from '../src/lib/db.ts';
+import { resetConfigCache } from '../src/lib/env.ts';
 import { createSecret, revealSecret } from '../src/lib/secrets.ts';
 import { countSecrets, resetEnv } from './helpers.ts';
 
@@ -104,6 +106,47 @@ describe('parallel revealSecret', () => {
       'first secret',
       'second secret',
     ]);
+    expect(await countSecrets()).toBe(0);
+  });
+
+  it('still gives the content to exactly one caller when decryption precedes the delete', async () => {
+    // Decryption now happens before the delete, so the race is between the
+    // deletes of N callers that all decrypted successfully. The invariant is
+    // unchanged: one winner, and the row exists for nobody afterwards.
+    const created = await createSecret({ secret: 'decrypted before deleted', expiresInDays: 7 });
+
+    const results = await Promise.all(
+      Array.from({ length: 20 }, () => revealSecret(created.token)),
+    );
+
+    const winners = results.filter((result) => result.ok);
+    expect(winners).toHaveLength(1);
+    expect(winners[0]?.ok === true ? winners[0].secret : '').toBe('decrypted before deleted');
+    for (const loser of results.filter((result) => !result.ok)) {
+      expect(loser).toEqual({ ok: false, reason: 'unavailable' });
+    }
+    expect(await countSecrets()).toBe(0);
+  });
+
+  it('leaves the row untouched when the key is wrong, however many callers race', async () => {
+    // None of the callers may reach the delete, so the secret survives and is
+    // readable again once the key is restored.
+    const originalKey = process.env.SECRET_ENCRYPTION_KEY;
+    const created = await createSecret({ secret: 'key comes back', expiresInDays: 7 });
+
+    process.env.SECRET_ENCRYPTION_KEY = Buffer.alloc(32, 5).toString('base64url');
+    resetConfigCache();
+    try {
+      const results = await Promise.all(Array.from({ length: 10 }, () => revealSecret(created.token)));
+      for (const result of results) expect(result).toEqual({ ok: false, reason: 'undecryptable' });
+      expect(await countSecrets()).toBe(1);
+    } finally {
+      process.env.SECRET_ENCRYPTION_KEY = originalKey;
+      resetConfigCache();
+    }
+
+    const results = await Promise.all(Array.from({ length: 10 }, () => revealSecret(created.token)));
+    expect(results.filter((result) => result.ok)).toHaveLength(1);
     expect(await countSecrets()).toBe(0);
   });
 });

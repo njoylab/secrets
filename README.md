@@ -60,6 +60,9 @@ npm start
 | `DATABASE_URL` | yes | — | PostgreSQL connection string, e.g. `postgres://user:password@host:5432/database`. |
 | `SECRET_ENCRYPTION_KEY` | yes | — | AES-256-GCM key, 32 random bytes encoded base64url. Held outside the database. |
 | `TRUSTED_PROXIES` | no | empty (trust nobody) | Comma-separated addresses of the proxies you control, which are then allowed to supply `X-Forwarded-For`. |
+| `HOST` | no | `127.0.0.1` | Interface the Node adapter listens on; the process is meant to sit behind a reverse proxy on the loopback. |
+| `SERVER_CERT_PATH` | no | — | Path to the PEM certificate when running with TLS in-process. |
+| `SERVER_KEY_PATH` | no | — | Path to the PEM private key when running with TLS in-process. |
 | `ALLOWED_HOSTS` | no | `localhost,127.0.0.1` | Hostnames this deployment answers to. Read at **build** time by `astro.config.mjs`. |
 | `ALLOWED_ORIGINS` | no | empty | Extra origins accepted for same-origin POSTs. |
 | `RATE_LIMIT_CREATE_MAX` | no | `20` | Secret creations allowed per window, per client IP. |
@@ -99,8 +102,13 @@ partial version marker. Re-running the command applies nothing and reports
 ## Cleanup
 
 `npm run cleanup` deletes expired rows from `secrets` and rate limit counters
-older than `CLEANUP_KEEP_COUNTER_SECONDS`, printing the counts. Run it from cron
-or a systemd timer, for example every hour:
+older than the counter retention, printing the counts. That retention is the
+largest of `CLEANUP_KEEP_COUNTER_SECONDS`, `RATE_LIMIT_CREATE_WINDOW_SECONDS` and
+`RATE_LIMIT_REVEAL_WINDOW_SECONDS`: a counter is keyed by the start of its
+window, so removing one whose window is still open would hand that client a fresh
+budget. When the effective retention is longer than the configured value, the
+script prints both so the mismatch is visible. Run it from cron or a systemd
+timer, for example every hour:
 
 ```
 17 * * * * cd /srv/secrets && npm run cleanup
@@ -115,7 +123,15 @@ or a systemd timer, for example every hour:
   PM2, container env) rather than in a file, and keep `.env` out of the deployment.
 - Run `npm run migrate` as a deploy step before switching traffic.
 - Schedule `npm run cleanup`.
-- The adapter listens on `HOST`/`PORT` (default port `8080`). Keep it on the loopback or a private interface and let the proxy be the only public entry point.
+- The adapter listens on `HOST`/`PORT` (default port `8080`). `HOST` defaults to
+  `127.0.0.1`, so the process is reachable only through a proxy on the same
+  machine; set it explicitly only when a proxy has to reach it on another
+  interface. Keep it on a private interface and let the proxy be the only public
+  entry point.
+- TLS in-process is optional and off by default: set both `SERVER_KEY_PATH` and
+  `SERVER_CERT_PATH` to make `server.mjs` serve HTTPS directly. The expected
+  deployment is still a proxy terminating TLS, and with both variables unset the
+  server stays plain HTTP.
 
 ## Security notes
 
@@ -151,6 +167,5 @@ npm test
 ```
 
 `npm test` loads `.env` and, when present, `.env.test` (the latter wins). Never
-point it at a production database. The test files are not part of the tree yet;
-`vitest.config.ts` expects them under `tests/` with a `tests/setup.ts` setup file
-and runs them serially against a single database.
+point it at a production database. The suite lives in `tests/`, uses
+`tests/setup.ts` as its setup file, and runs serially against a single database.

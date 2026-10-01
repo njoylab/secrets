@@ -7,6 +7,7 @@
  * deletion is not guaranteed erasure.
  */
 import pg from 'pg';
+import { counterRetention, parseSeconds } from '../src/lib/retention.mjs';
 
 function fail(message) {
   process.stderr.write(`${message}\n`);
@@ -16,11 +17,20 @@ function fail(message) {
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) fail('DATABASE_URL is required');
 
-const rawRetention = process.env.CLEANUP_KEEP_COUNTER_SECONDS ?? '3600';
-const keepCounterSeconds = Number.parseInt(rawRetention, 10);
-if (!Number.isSafeInteger(keepCounterSeconds) || keepCounterSeconds < 0) {
-  fail('CLEANUP_KEEP_COUNTER_SECONDS must be a non-negative integer');
+// The operator's own setting is validated loudly, with the very parser that
+// counterRetention() reads it with, so a malformed value cannot pass the check
+// here and then be silently replaced by the default further down.
+const rawRetention = process.env.CLEANUP_KEEP_COUNTER_SECONDS;
+if (rawRetention !== undefined && rawRetention.trim() !== '') {
+  if (parseSeconds(rawRetention) === undefined) {
+    fail('CLEANUP_KEEP_COUNTER_SECONDS must be a non-negative integer');
+  }
 }
+
+// A counter is keyed by the start of its window: dropping one whose window is
+// still open would hand that subject a fresh budget, so the configured retention
+// is raised to the longest rate limit window.
+const { configuredSeconds, effectiveSeconds } = counterRetention(process.env);
 
 const client = new pg.Client({ connectionString: databaseUrl });
 await client.connect();
@@ -37,7 +47,7 @@ try {
         RETURNING 1
      )
      SELECT count(*)::int AS count FROM deleted`,
-    [keepCounterSeconds],
+    [effectiveSeconds],
   );
 
   const secretCount = secrets.rows[0]?.count ?? 0;
@@ -45,6 +55,12 @@ try {
   process.stdout.write(
     `removed ${secretCount} expired secret(s) and ${counterCount} idle counter(s)\n`,
   );
+  if (effectiveSeconds > configuredSeconds) {
+    process.stdout.write(
+      `counter retention raised to ${effectiveSeconds}s: CLEANUP_KEEP_COUNTER_SECONDS is ${configuredSeconds}s, ` +
+        'shorter than a rate limit window, which would reset the budget of a subject whose window is still open\n',
+    );
+  }
 } finally {
   await client.end();
 }
