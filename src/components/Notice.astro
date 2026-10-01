@@ -1,0 +1,23 @@
+---
+interface Props {
+  heading: string;
+  hint?: string;
+  id?: string;
+  headingId?: string;
+  class?: string;
+  hidden?: boolean;
+}
+
+const { heading, hint, id, headingId, class: className, hidden = false } = Astro.props;
+---
+
+<section
+  id={id}
+  class:list={['panel', className]}
+  tabindex="-1"
+  aria-labelledby={headingId}
+  hidden={hidden ? true : undefined}
+>
+  <h2 class="panel-title" id={headingId}>{heading}</h2>
+  {hint && <p class="note">{hint}</p>}
+</section>

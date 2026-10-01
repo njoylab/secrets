@@ -1,0 +1,260 @@
+---
+import CreateForm from '../components/CreateForm.astro';
+import ResultPanel from '../components/ResultPanel.astro';
+import Layout from '../layouts/Layout.astro';
+import { getDictionary } from '../lib/i18n.ts';
+
+export const prerender = false;
+
+const t = getDictionary(Astro.locals.locale);
+---
+
+<Layout title={t.create.title}>
+  <h1 class="page-title">{t.create.title}</h1>
+  <CreateForm />
+  <ResultPanel />
+</Layout>
+
+<script>
+  interface CreateApiResponse {
+    ok?: boolean;
+    url?: string;
+    expiresAt?: string;
+    message?: string;
+  }
+
+  /** Deprecated selection based copy, reached only when the Clipboard API is unusable. */
+  interface LegacyClipboard {
+    execCommand(commandId: string): boolean;
+  }
+
+  const COPY_RESET_DELAY = 1500;
+
+  function byId<T extends HTMLElement>(id: string): T | null {
+    return document.getElementById(id) as T | null;
+  }
+
+  /** Clipboard API first, selection based copy as the fallback for insecure contexts. */
+  async function copyToClipboard(text: string): Promise<boolean> {
+    if (!text) return false;
+
+    if (navigator.clipboard && window.isSecureContext) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch {
+        // Permission denied: fall through to the manual selection below.
+      }
+    }
+
+    const previous = document.activeElement;
+    const helper = document.createElement('textarea');
+    helper.value = text;
+    helper.setAttribute('readonly', '');
+    helper.style.position = 'fixed';
+    helper.style.top = '-1000px';
+    helper.style.opacity = '0';
+    document.body.appendChild(helper);
+    try {
+      helper.select();
+      helper.setSelectionRange(0, text.length);
+      return (document as unknown as LegacyClipboard).execCommand('copy');
+    } catch {
+      return false;
+    } finally {
+      helper.remove();
+      if (previous instanceof HTMLElement) previous.focus();
+    }
+  }
+
+  function formatInstant(value: string, locale: string): string {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    try {
+      return new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
+    } catch {
+      return value;
+    }
+  }
+
+  function initCreateFlow(): void {
+    const form = byId<HTMLFormElement>('create-form');
+    const panel = byId<HTMLElement>('result-panel');
+    const status = byId<HTMLElement>('create-status');
+    const submit = byId<HTMLButtonElement>('create-submit');
+    const secret = byId<HTMLTextAreaElement>('secret');
+    const expiry = byId<HTMLInputElement>('expiry');
+    const password = byId<HTMLInputElement>('create-password');
+    const link = byId<HTMLInputElement>('result-link');
+    const copyButton = byId<HTMLButtonElement>('result-copy');
+    const resultStatus = byId<HTMLElement>('result-status');
+    const expiryValue = byId<HTMLElement>('result-expiry-value');
+    const expiryDays = byId<HTMLElement>('result-expiry-days');
+    const another = byId<HTMLButtonElement>('result-another');
+
+    if (
+      !form ||
+      !panel ||
+      !status ||
+      !submit ||
+      !secret ||
+      !expiry ||
+      !password ||
+      !link ||
+      !copyButton ||
+      !resultStatus ||
+      !expiryValue ||
+      !expiryDays ||
+      !another
+    ) {
+      return;
+    }
+
+    // Captured once so the closures below keep the narrowed element types.
+    const fields = [secret, expiry, password];
+
+    const formData = form.dataset;
+    const serverError = formData.errorServer ?? '';
+    const secretMax = Number(formData.secretMax ?? 0);
+    const passwordMax = Number(formData.passwordMax ?? 0);
+    const minDays = Number(expiry.min);
+    const maxDays = Number(expiry.max);
+    const encoder = new TextEncoder();
+
+    const submitIdle = submit.dataset.labelIdle ?? submit.textContent ?? '';
+    const submitBusy = submit.dataset.labelBusy ?? submitIdle;
+    const copyIdle = copyButton.dataset.labelIdle ?? '';
+    const copyDone = copyButton.dataset.labelDone ?? '';
+    const copyFailed = copyButton.dataset.labelFailed ?? '';
+    const daysLabel = expiryDays.dataset.labelDays ?? '';
+
+    // Original hint associations, so error wiring stays reversible.
+    const describedBy = new Map<string, string>();
+    for (const field of fields) {
+      describedBy.set(field.id, field.getAttribute('aria-describedby') ?? '');
+    }
+
+    let copyTimer = 0;
+
+    const clearErrors = (): void => {
+      status.textContent = '';
+      for (const field of fields) {
+        field.removeAttribute('aria-invalid');
+        field.setAttribute('aria-describedby', describedBy.get(field.id) ?? '');
+      }
+    };
+
+    const showError = (field: HTMLElement | null, message: string): void => {
+      clearErrors();
+      status.textContent = message;
+      if (!field) return;
+      const base = describedBy.get(field.id) ?? '';
+      field.setAttribute('aria-invalid', 'true');
+      field.setAttribute('aria-describedby', base ? `${base} ${status.id}` : status.id);
+    };
+
+    const validate = (): { field: HTMLElement; message: string } | null => {
+      if (secret.value.length === 0) {
+        return { field: secret, message: formData.errorSecretRequired ?? '' };
+      }
+      if (secretMax > 0 && encoder.encode(secret.value).length > secretMax) {
+        return { field: secret, message: formData.errorSecretTooLong ?? '' };
+      }
+      const days = Number(expiry.value);
+      if (!Number.isInteger(days) || days < minDays || days > maxDays) {
+        return { field: expiry, message: formData.errorInvalidExpiry ?? '' };
+      }
+      if (passwordMax > 0 && password.value.length > passwordMax) {
+        return { field: password, message: formData.errorPasswordTooLong ?? '' };
+      }
+      return null;
+    };
+
+    const showResult = (payload: CreateApiResponse, days: number): void => {
+      link.value = payload.url ?? '';
+      expiryValue.textContent = formatInstant(payload.expiresAt ?? '', expiryValue.dataset.locale ?? 'en');
+      expiryDays.textContent = daysLabel ? `${days} ${daysLabel}` : '';
+      resultStatus.textContent = '';
+      // The plaintext has left the page: drop it from the DOM as well.
+      secret.value = '';
+      password.value = '';
+      form.hidden = true;
+      panel.hidden = false;
+      panel.focus();
+    };
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      clearErrors();
+
+      const invalid = validate();
+      if (invalid) {
+        showError(invalid.field, invalid.message);
+        invalid.field.focus();
+        return;
+      }
+
+      const days = Number(expiry.value);
+      const body: { secret: string; expiresInDays: number; password?: string } = {
+        secret: secret.value,
+        expiresInDays: days,
+      };
+      if (password.value.length > 0) body.password = password.value;
+
+      submit.setAttribute('aria-busy', 'true');
+      submit.disabled = true;
+      submit.textContent = submitBusy;
+
+      try {
+        const response = await fetch('/api/secrets', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const payload = (await response.json()) as CreateApiResponse;
+
+        if (!response.ok || payload.ok !== true || typeof payload.url !== 'string') {
+          showError(null, typeof payload.message === 'string' ? payload.message : serverError);
+          return;
+        }
+        showResult(payload, days);
+      } catch {
+        showError(null, serverError);
+      } finally {
+        submit.removeAttribute('aria-busy');
+        submit.disabled = false;
+        submit.textContent = submitIdle;
+      }
+    });
+
+    copyButton.addEventListener('click', async () => {
+      const copied = await copyToClipboard(link.value);
+      window.clearTimeout(copyTimer);
+      if (copied) {
+        copyButton.textContent = copyDone;
+        resultStatus.textContent = copyDone;
+      } else {
+        copyButton.textContent = copyIdle;
+        resultStatus.textContent = copyFailed;
+      }
+      copyTimer = window.setTimeout(() => {
+        copyButton.textContent = copyIdle;
+        resultStatus.textContent = '';
+      }, COPY_RESET_DELAY);
+    });
+
+    another.addEventListener('click', () => {
+      window.clearTimeout(copyTimer);
+      copyButton.textContent = copyIdle;
+      resultStatus.textContent = '';
+      panel.hidden = true;
+      form.hidden = false;
+      form.reset();
+      clearErrors();
+      secret.focus();
+    });
+  }
+
+  initCreateFlow();
+</script>

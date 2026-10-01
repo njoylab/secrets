@@ -1,0 +1,41 @@
+---
+import '../styles/global.css';
+import { getDictionary } from '../lib/i18n.ts';
+import LanguageSwitcher from '../components/LanguageSwitcher.astro';
+
+interface Props {
+  title: string;
+}
+
+const { title } = Astro.props;
+const locale = Astro.locals.locale;
+const t = getDictionary(locale);
+// Language links return to the current path, query string included.
+const next = `${Astro.url.pathname}${Astro.url.search}`;
+---
+
+<!doctype html>
+<html lang={locale}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title} · {t.meta.title}</title>
+    <meta name="description" content={t.meta.description} />
+    <meta name="robots" content={t.meta.robots} />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="color-scheme" content="dark" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">{t.skipToContent}</a>
+    <div class="shell">
+      <header class="site-header">
+        <a class="brand" href="/">{t.nav.home}</a>
+        <LanguageSwitcher locale={locale} next={next} />
+      </header>
+      <main id="main" tabindex="-1">
+        <slot />
+      </main>
+      <footer class="site-footer">{t.footer.limits}</footer>
+    </div>
+  </body>
+</html>

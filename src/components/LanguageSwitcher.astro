@@ -1,0 +1,32 @@
+---
+import { getDictionary, type Locale } from '../lib/i18n.ts';
+
+interface Props {
+  locale: Locale;
+  next: string;
+}
+
+const { locale, next } = Astro.props;
+const t = getDictionary(locale);
+const target = encodeURIComponent(next);
+---
+
+<nav class="lang" aria-label={t.language.label}>
+  <span class="lang-caption" aria-hidden="true">{t.language.label}</span>
+  <a
+    href={`/api/locale?lang=it&next=${target}`}
+    lang="it"
+    hreflang="it"
+    aria-current={locale === 'it' ? 'true' : undefined}
+  >
+    {t.language.it}
+  </a>
+  <a
+    href={`/api/locale?lang=en&next=${target}`}
+    lang="en"
+    hreflang="en"
+    aria-current={locale === 'en' ? 'true' : undefined}
+  >
+    {t.language.en}
+  </a>
+</nav>

@@ -1,0 +1,248 @@
+---
+import Notice from '../../components/Notice.astro';
+import Panel from '../../components/Panel.astro';
+import PasswordField from '../../components/PasswordField.astro';
+import Layout from '../../layouts/Layout.astro';
+import { getDictionary } from '../../lib/i18n.ts';
+import { peekSecretPresence } from '../../lib/secrets.ts';
+
+export const prerender = false;
+
+const locale = Astro.locals.locale;
+const t = getDictionary(locale);
+const token = Astro.params.token ?? '';
+// Rendering only checks presence: it never decrypts and never deletes.
+const presence = await peekSecretPresence(token);
+---
+
+<Layout title={t.open.title}>
+  <h1 class="page-title">{t.open.title}</h1>
+
+  {
+    presence === null ? (
+      <Panel>
+        <p class="notice-message">{t.open.unavailable}</p>
+      </Panel>
+    ) : (
+      <>
+        <Panel id="open-panel">
+          <form
+            id="open-form"
+            class="form"
+            novalidate
+            data-token={token}
+            data-error-server={t.errors.serverError}
+          >
+            {presence.requiresPassword && (
+              <PasswordField
+                id="open-password"
+                label={t.open.passwordLabel}
+                showLabel={t.open.passwordShow}
+                hideLabel={t.open.passwordHide}
+                autocomplete="current-password"
+                required
+              />
+            )}
+            <p class="status" id="open-status" role="status" aria-live="polite"></p>
+            <button
+              type="submit"
+              class="btn btn-primary btn-block"
+              id="open-submit"
+              data-label-idle={t.open.reveal}
+              data-label-busy={t.open.revealing}
+            >
+              {t.open.reveal}
+            </button>
+            <p class="note">{t.open.noteSingleRead}</p>
+          </form>
+        </Panel>
+
+        <Panel id="secret-panel" heading={t.secret.title} headingId="secret-title" hidden>
+          <pre class="secret" id="secret-text" tabindex="0"></pre>
+          <button
+            type="button"
+            class="btn btn-ghost align-start"
+            id="secret-copy"
+            data-label-idle={t.secret.copy}
+            data-label-done={t.secret.copied}
+            data-label-failed={t.secret.copyFailed}
+          >
+            {t.secret.copy}
+          </button>
+          <p class="status" id="secret-status" role="status" aria-live="polite"></p>
+          <p class="panel-title">{t.secret.consumed}</p>
+          <p class="note">{t.secret.consumedHint}</p>
+        </Panel>
+
+        <Notice
+          id="secret-consumed"
+          headingId="secret-consumed-title"
+          heading={t.secret.consumed}
+          hint={t.secret.consumedHint}
+          hidden
+        />
+      </>
+    )
+  }
+</Layout>
+
+<script>
+  interface RevealApiResponse {
+    ok?: boolean;
+    secret?: string;
+    error?: string;
+    message?: string;
+  }
+
+  /** Deprecated selection based copy, reached only when the Clipboard API is unusable. */
+  interface LegacyClipboard {
+    execCommand(commandId: string): boolean;
+  }
+
+  const COPY_RESET_DELAY = 1500;
+
+  function byId<T extends HTMLElement>(id: string): T | null {
+    return document.getElementById(id) as T | null;
+  }
+
+  /** Clipboard API first, selection based copy as the fallback for insecure contexts. */
+  async function copyToClipboard(text: string): Promise<boolean> {
+    if (!text) return false;
+
+    if (navigator.clipboard && window.isSecureContext) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch {
+        // Permission denied: fall through to the manual selection below.
+      }
+    }
+
+    const previous = document.activeElement;
+    const helper = document.createElement('textarea');
+    helper.value = text;
+    helper.setAttribute('readonly', '');
+    helper.style.position = 'fixed';
+    helper.style.top = '-1000px';
+    helper.style.opacity = '0';
+    document.body.appendChild(helper);
+    try {
+      helper.select();
+      helper.setSelectionRange(0, text.length);
+      return (document as unknown as LegacyClipboard).execCommand('copy');
+    } catch {
+      return false;
+    } finally {
+      helper.remove();
+      if (previous instanceof HTMLElement) previous.focus();
+    }
+  }
+
+  function initRevealFlow(): void {
+    const form = byId<HTMLFormElement>('open-form');
+    const status = byId<HTMLElement>('open-status');
+    const submit = byId<HTMLButtonElement>('open-submit');
+    const password = byId<HTMLInputElement>('open-password');
+    const secretPanel = byId<HTMLElement>('secret-panel');
+    const secretText = byId<HTMLElement>('secret-text');
+    const copyButton = byId<HTMLButtonElement>('secret-copy');
+    const copyStatus = byId<HTMLElement>('secret-status');
+    const consumed = byId<HTMLElement>('secret-consumed');
+
+    if (!form || !status || !submit || !secretPanel || !secretText || !copyButton || !copyStatus) {
+      return;
+    }
+
+    // The token travels as a data attribute, never as an interpolated script string.
+    const token = form.dataset.token ?? '';
+    const serverError = form.dataset.errorServer ?? '';
+    const revealIdle = submit.dataset.labelIdle ?? submit.textContent ?? '';
+    const revealBusy = submit.dataset.labelBusy ?? revealIdle;
+    const copyIdle = copyButton.dataset.labelIdle ?? '';
+    const copyDone = copyButton.dataset.labelDone ?? '';
+    const copyFailed = copyButton.dataset.labelFailed ?? '';
+
+    // A revealed secret is consumed server side: no second read is ever attempted.
+    let revealed = false;
+    let copyTimer = 0;
+
+    const showConsumed = (): void => {
+      form.hidden = true;
+      if (password) password.value = '';
+      if (!consumed) return;
+      consumed.hidden = false;
+      consumed.focus();
+    };
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (revealed) return;
+
+      status.textContent = '';
+      submit.setAttribute('aria-busy', 'true');
+      submit.disabled = true;
+      submit.textContent = revealBusy;
+
+      const body: { token: string; password?: string } = { token };
+      if (password && password.value.length > 0) body.password = password.value;
+
+      try {
+        const response = await fetch('/api/secrets/reveal', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const payload = (await response.json()) as RevealApiResponse;
+
+        if (response.ok && payload.ok === true && typeof payload.secret === 'string') {
+          revealed = true;
+          // textContent keeps the secret inert: markup is never interpreted.
+          secretText.textContent = payload.secret;
+          form.hidden = true;
+          if (password) password.value = '';
+          secretPanel.hidden = false;
+          secretPanel.focus();
+          return;
+        }
+
+        // Missing, expired and already consumed share one single server answer.
+        if (payload.error === 'unavailable') {
+          revealed = true;
+          showConsumed();
+          return;
+        }
+
+        status.textContent = typeof payload.message === 'string' ? payload.message : serverError;
+        if (payload.error === 'badPassword' && password) {
+          password.focus();
+          password.select();
+        }
+      } catch {
+        status.textContent = serverError;
+      } finally {
+        submit.removeAttribute('aria-busy');
+        submit.disabled = false;
+        submit.textContent = revealIdle;
+      }
+    });
+
+    copyButton.addEventListener('click', async () => {
+      const copied = await copyToClipboard(secretText.textContent ?? '');
+      window.clearTimeout(copyTimer);
+      if (copied) {
+        copyButton.textContent = copyDone;
+        copyStatus.textContent = copyDone;
+      } else {
+        copyButton.textContent = copyIdle;
+        copyStatus.textContent = copyFailed;
+      }
+      copyTimer = window.setTimeout(() => {
+        copyButton.textContent = copyIdle;
+        copyStatus.textContent = '';
+      }, COPY_RESET_DELAY);
+    });
+  }
+
+  initRevealFlow();
+</script>

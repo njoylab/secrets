@@ -1,0 +1,44 @@
+---
+import { getDictionary } from '../lib/i18n.ts';
+import Panel from './Panel.astro';
+
+const locale = Astro.locals.locale;
+const t = getDictionary(locale);
+---
+
+<Panel id="result-panel" heading={t.result.title} headingId="result-title" hidden>
+  <div class="field">
+    <label for="result-link">{t.result.linkLabel}</label>
+    <div class="copy-row">
+      <input
+        id="result-link"
+        class="input-mono"
+        type="text"
+        readonly
+        spellcheck="false"
+        autocomplete="off"
+        aria-describedby="result-expiry"
+      />
+      <button
+        type="button"
+        class="btn btn-ghost"
+        id="result-copy"
+        data-label-idle={t.result.copy}
+        data-label-done={t.result.copied}
+        data-label-failed={t.result.copyFailed}
+      >
+        {t.result.copy}
+      </button>
+    </div>
+  </div>
+
+  <p class="meta" id="result-expiry">
+    <span class="meta-label">{t.result.expires}</span>
+    <span id="result-expiry-value" data-locale={locale}></span>
+    <span class="suffix" id="result-expiry-days" data-label-days={t.result.days}></span>
+  </p>
+
+  <p class="status" id="result-status" role="status" aria-live="polite"></p>
+
+  <button type="button" class="btn btn-block" id="result-another">{t.result.another}</button>
+</Panel>
