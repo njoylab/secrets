@@ -15,6 +15,7 @@ import { POST as cancelEndpoint } from '../src/pages/api/secrets/cancel.ts';
 import { POST as verifierEndpoint } from '../src/pages/api/secrets/verifier.ts';
 import { CANCEL_BUCKET, REVEAL_BUCKET } from '../src/lib/rate-limit.ts';
 import { MAX_PAYLOAD_BYTES } from '../src/lib/secrets.ts';
+import { generateToken, hashToken } from '../src/lib/crypto.ts';
 import {
   countRateLimits,
   countReceipts,
@@ -73,9 +74,54 @@ beforeEach(async () => {
 });
 
 describe('POST /api/secrets', () => {
+  it('refuses token-only consumption of a proof-protected secret without deleting it', async () => {
+    await resetEnv({ RATE_LIMIT_REVEAL_MAX: '30' });
+    const { payload } = await sealedSecret('authorization regression');
+    const proof = generateToken();
+    const created = await create({ payload, expiresIn: '7d', verifier: await dummyVerifier(), revealProofHash: hashToken(proof) });
+    expect(created.status).toBe(201);
+    const token = String(created.body.token);
+    for (const revealProof of [undefined, null, 42, generateToken(), hashToken(proof)]) {
+      expect((await reveal({ token, revealProof })).status).toBe(403);
+      expect(await countSecrets()).toBe(1);
+      expect(await countReceipts()).toBe(0);
+    }
+    expect((await reveal({ token, revealProof: proof })).body.payload).toBe(payload);
+    expect((await reveal({ token, revealProof: proof })).status).toBe(404);
+    expect(await countReceipts()).toBe(1);
+    await resetEnv({ RATE_LIMIT_REVEAL_MAX: '5' });
+  });
+
+  it('rejects missing or malformed proof hashes on new password links', async () => {
+    await resetEnv({ RATE_LIMIT_CREATE_MAX: '30' });
+    const { payload } = await sealedSecret('proof validation');
+    const check = await dummyVerifier();
+    for (const revealProofHash of [undefined, null, 42, '', 'a'.repeat(63), 'G'.repeat(64)]) {
+      expect((await create({ payload, expiresIn: '7d', verifier: check, revealProofHash })).status).toBe(422);
+    }
+    expect((await create({ payload, expiresIn: '7d', revealProofHash: hashToken(generateToken()) })).status).toBe(422);
+    expect(await countSecrets()).toBe(0);
+    await resetEnv({ RATE_LIMIT_CREATE_MAX: '5' });
+  });
+
+  it('allows only one concurrent reveal with the correct proof', async () => {
+    await resetEnv({ RATE_LIMIT_REVEAL_MAX: '30' });
+    const { payload } = await sealedSecret('proof race');
+    const proof = generateToken();
+    const created = await create({ payload, expiresIn: '7d', verifier: await dummyVerifier(), revealProofHash: hashToken(proof) });
+    const token = String(created.body.token);
+    const replies = await Promise.all(Array.from({ length: 8 }, (_, i) =>
+      reveal({ token, revealProof: i % 2 === 0 ? proof : generateToken() })));
+    expect(replies.filter((reply) => reply.status === 200)).toHaveLength(1);
+    expect(replies.find((reply) => reply.status === 200)?.body.payload).toBe(payload);
+    expect(await countSecrets()).toBe(0);
+    expect(await countReceipts()).toBe(1);
+    await resetEnv({ RATE_LIMIT_REVEAL_MAX: '5' });
+  });
+
   it('accepts a payload, an expiry preset and a verifier, and returns two links', async () => {
     const { payload } = await sealedSecret('wire contract');
-    const reply = await create({ payload, expiresIn: '1h', verifier: await dummyVerifier() });
+    const reply = await create({ payload, expiresIn: '1h', verifier: await dummyVerifier(), revealProofHash: hashToken(generateToken()) });
 
     expect(reply.status).toBe(201);
     expect(reply.body.ok).toBe(true);
@@ -206,7 +252,8 @@ describe('POST /api/secrets/reveal', () => {
   it('returns the verifier without consuming, then reveal still returns the payload once', async () => {
     const { payload } = await sealedSecret('locked');
     const check = await dummyVerifier();
-    const created = await create({ payload, expiresIn: '7d', verifier: check });
+    const proof = generateToken();
+    const created = await create({ payload, expiresIn: '7d', verifier: check, revealProofHash: hashToken(proof) });
     const token = String(created.body.token);
 
     const first = await verifier({ token });
@@ -214,7 +261,7 @@ describe('POST /api/secrets/reveal', () => {
     expect(first.body.verifier).toBe(check);
     expect(await countSecrets()).toBe(1);
 
-    expect((await reveal({ token })).body.payload).toBe(payload);
+    expect((await reveal({ token, revealProof: proof })).body.payload).toBe(payload);
     expect((await verifier({ token })).status).toBe(404);
   });
 
@@ -327,10 +374,11 @@ describe('POST /api/secrets/cancel', () => {
 describe('the two links, end to end', () => {
   it('keeps the content key out of every response the server sends', async () => {
     const { payload, keyText } = await sealedSecret('end to end');
-    const created = await create({ payload, expiresIn: '1d', verifier: await dummyVerifier() });
+    const proof = generateToken();
+    const created = await create({ payload, expiresIn: '1d', verifier: await dummyVerifier(), revealProofHash: hashToken(proof) });
     const controlToken = String(created.body.controlToken);
 
-    const statuses = [await reveal({ token: String(created.body.token) })];
+    const statuses = [await reveal({ token: String(created.body.token), revealProof: proof })];
     expect(statuses[0]?.body.payload).toBe(payload);
 
     const link = shareLink(ORIGIN, String(created.body.token), keyText);

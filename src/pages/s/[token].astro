@@ -99,7 +99,7 @@ const presence = await peekSecretPresence(token);
 
 <script>
   import {
-    PASSWORD_VERIFIER_TEXT,
+    openPasswordVerifier,
     decodeShareFragment,
     decryptPayload,
     derivePasswordKey,
@@ -271,6 +271,7 @@ const presence = await peekSecretPresence(token);
       setButtonLabel(submit, revealBusy);
 
       let openingKey: ContentBytes = fragmentKey;
+      let revealProof: string | undefined;
 
       try {
         if (passwordMode === 'client') {
@@ -293,8 +294,7 @@ const presence = await peekSecretPresence(token);
           }
           try {
             openingKey = await derivePasswordKey(fragmentKey, supplied, salt);
-            const opened = await decryptPayload(checkBody.verifier, openingKey);
-            if (opened !== PASSWORD_VERIFIER_TEXT) throw new Error('Verifier text did not match');
+            revealProof = await openPasswordVerifier(checkBody.verifier, openingKey);
           } catch {
             fail(badPassword);
             if (password) {
@@ -305,7 +305,8 @@ const presence = await peekSecretPresence(token);
           }
         }
 
-        const body: { token: string; password?: string } = { token };
+        const body: { token: string; password?: string; revealProof?: string } = { token };
+        if (revealProof) body.revealProof = revealProof;
         // Legacy rows still gate reveal on the server. New rows never send it.
         if (passwordMode === 'server' && password && password.value.length > 0) {
           body.password = password.value;

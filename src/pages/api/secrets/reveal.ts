@@ -26,7 +26,8 @@ export const POST: APIRoute = async (context) => {
   if (!isValidTokenShape(token)) return errorResponse(locale, 'unavailable', 404);
 
   const password = typeof body.password === 'string' ? body.password : undefined;
-  const result = await revealSecret(token, password);
+  const revealProof = typeof body.revealProof === 'string' ? body.revealProof : undefined;
+  const result = await revealSecret(token, password, revealProof);
 
   if (!result.ok) {
     if (result.reason === 'bad_password') {

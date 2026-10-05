@@ -66,7 +66,8 @@ npm start
 1. The browser generates a 32-byte content key and seals the secret as
    `base64url(nonce || ciphertext || tag)` with AES-256-GCM under that key.
 2. The browser POSTs only that sealed payload, an `expiresIn` preset and, when
-   a password was set, a short sealed verifier. **The key and the password are
+   a password was set, a short sealed verifier and a random reveal proof's SHA-256
+   hash. The proof is sealed inside that verifier. **The key and the password are
    never sent.** The password is mixed into the content key in the browser
    (PBKDF2-HMAC-SHA256, 600,000 iterations, then HKDF with the fragment key).
    The server never sees the plaintext or the password, so a database dump plus
@@ -81,7 +82,9 @@ npm start
 5. The recipient opens `/s/<token>#<key>`. The page reads the fragment and
    removes it from the address bar. A GET never consumes anything. With a
    password, the browser first asks for the verifier and checks it locally; a
-   wrong password does not reveal. A deliberate POST to `/api/secrets/reveal`
+   wrong password does not reveal. Decrypting the verifier releases the random
+   proof, which the server requires in the `revealProof` field before consuming
+   a new password-protected link. A deliberate POST to `/api/secrets/reveal`
    performs the single `DELETE ... RETURNING` and returns the sealed payload.
    The browser opens it with the fragment key, or with the password-derived key.
 
@@ -218,10 +221,16 @@ timer, for example every hour:
   statement has committed.
 - Optional passwords never reach the server. The browser derives a key with
   PBKDF2-HMAC-SHA256 (600,000 iterations) and HKDF over the fragment key, and
-  stores only a sealed verifier. A wrong password fails that check locally and
-  does not consume the secret. A caller that skips the check can still burn the
-  row and take the ciphertext, which remains unreadable without the password.
-  Rows created before this change keep a scrypt hash (N=32768, r=8, p=1) and
+  seals an independent 256-bit reveal proof inside the verifier. Only the proof's
+  SHA-256 hash is stored for server authorization; the password, fragment key and
+  derived key remain in the browser. New password links require a valid proof
+  before deletion, so token-only API requests cannot consume them.
+  Migration `0004_reveal_proof.sql` is additive. Existing v1 links retain their
+  original contract until expiration (at most 30 days): a caller bypassing the
+  browser check can consume their unreadable ciphertext. Existing pages must be
+  refreshed before creating password links with the new protocol. Do not roll
+  back to code that ignores reveal proofs: it would reopen the consumption bypass
+  for new links. Older rows keep a scrypt hash (N=32768, r=8, p=1) and
   still reject a wrong password on the server, outside any database lock.
 - Consumption is a single conditional `DELETE ... RETURNING` inside the same
   transaction that writes the `read` receipt, so at most one concurrent request
@@ -306,8 +315,8 @@ setup. Use the isolated database for every invocation of this Vitest config.
 
 the platform manages the deployment on the hosting provider. CI verifies typecheck,
 PostgreSQL tests, build, browser flows and the production dependency audit.
-The workflow has not yet run on GitHub; local checks are not proof of a CI-gated
-release. The current Git webhook can deploy a push before CI finishes. Deploy
+The first GitHub attempt could not acquire a hosted runner; local checks are not
+proof of a CI-gated release. The current Git webhook can deploy a push before CI finishes. Deploy
 only a verified revision, or configure a CI gate before relying on automatic releases.
 
 Browser tests use the built Node server on loopback with Chromium, Firefox and
@@ -372,23 +381,27 @@ shared PostgreSQL resource found in the platform has daily all-databases backups
 successful executions, local retention 3 days, S3 enabled with retention 14 days,
 and missing-backup alerts disabled. Confirm it hosts this app before changing
 scope; its shared retention affects other databases and exceeds the seven-day
-policy target. No the platform setting was changed during inspection.
+policy target. The subsequent approved release enabled the health check and
+hourly cleanup, and moved migrations into `npm start` before accepting traffic.
+The observed runtime was Node 22.23.3, which meets the minimum of 22.12.
+Cleanup execution and backup ownership still require verification.
 
 Public HTTP redirected to HTTPS and cache was disabled, but response headers
 were `Referrer-Policy: same-origin`, `X-Frame-Options: SAMEORIGIN`, with no HSTS
-or CSP. The page already has a `no-referrer` meta tag. The new readiness route
-is not deployed. No production secret was created or consumed.
+or CSP. The approved release now passes public readiness and header checks,
+including the application CSP. A Cloudflare response-header rule scoped to
+`secrets.example.com` sets `no-referrer`, `DENY` and HSTS (`max-age=15552000`).
 
-Local proof: 424 PostgreSQL/unit tests and 40 browser cases passed, with clean
+Local proof: 428 PostgreSQL/unit tests and 40 browser cases passed, with clean
 build/typecheck and no known npm vulnerabilities. An isolated restore drill
 reproduced resurrection and verified offline payload removal prevents it. Outage
 checks returned safe 503 responses and recovered without losing a pending fixture;
 chunked body limits, malformed-host rejection and token-free metrics/errors
 passed. A 100-request local readiness burst had p95 about 40 ms, not a production
 capacity estimate. Actual the platform restore, notification delivery, log retention
-and edge protections remain unverified. Password consumption protection remains
-unchanged: a direct API caller with the share token can consume ciphertext without
-performing the browser password check.
+and edge rate limits remain unverified. The v2 password protocol rejects direct
+API consumption without the proof released by the password verifier. Existing
+v1 links retain the consumption limitation described above until expiration.
 
 References: [the platform backups](https://example.com/docs/databases/backups),
 [proxy middleware](https://example.com/docs/core/networking/proxy/traefik/custom-middlewares),

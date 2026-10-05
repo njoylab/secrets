@@ -118,11 +118,10 @@ describe('payload size', () => {
 
 describe('request body size', () => {
   it('accepts a body whose JSON escapes push it past the 64 KiB default', async () => {
-    // base64url never expands, so a full size payload plus a full size verifier
-    // is the worst legitimate creation body.
+    // base64url never expands, so use maximum envelopes and the proof hash.
     const payload = 'a'.repeat(MAX_PAYLOAD_BYTES);
     const verifier = 'a'.repeat(MAX_VERIFIER_BYTES);
-    const request = jsonPost({ payload, expiresIn: '7d', verifier });
+    const request = jsonPost({ payload, expiresIn: '7d', verifier, revealProofHash: 'a'.repeat(64) });
     expect(Buffer.byteLength(await request.clone().text(), 'utf8')).toBeGreaterThan(64 * 1024);
     expect(Buffer.byteLength(await request.clone().text(), 'utf8')).toBeLessThanOrEqual(MAX_CREATE_BODY_BYTES);
 

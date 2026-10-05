@@ -32,12 +32,18 @@ export const POST: APIRoute = async (context) => {
   const body = await readJsonBody(context.request, MAX_CREATE_BODY_BYTES);
   if (!body) return errorResponse(locale, 'badRequest', 400);
   if (hasPasswordField(body.password)) return errorResponse(locale, 'passwordRejected', 422);
+  // Never let an old client create a new password link without server authorization.
+  if (typeof body.verifier === 'string' && body.verifier.length > 0 &&
+      (typeof body.revealProofHash !== 'string' || !/^[0-9a-f]{64}$/.test(body.revealProofHash))) {
+    return errorResponse(locale, 'invalidVerifier', 422);
+  }
 
   try {
     const created = await createSecret({
       payload: body.payload as string,
       expiresIn: body.expiresIn as ExpiryPreset,
       verifier: body.verifier as string | undefined,
+      revealProofHash: body.revealProofHash as string | undefined,
     });
 
     const config = getConfig();

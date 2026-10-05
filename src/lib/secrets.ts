@@ -13,6 +13,7 @@
  * key, so a database dump is still not the text.
  */
 import { Buffer } from 'node:buffer';
+import { timingSafeEqual } from 'node:crypto';
 import { query, withClient } from './db.ts';
 import { getConfig } from './env.ts';
 import {
@@ -55,8 +56,8 @@ export const MAX_PASSWORD_LENGTH = PASSWORD_MAX_LENGTH;
 /**
  * Largest sealed verifier the browser may store.
  *
- * The verifier plaintext is a short constant. The ceiling leaves room for that
- * envelope and refuses a second copy of the secret smuggled in this field.
+ * The verifier plaintext carries a short prefix and a random reveal proof.
+ * The ceiling refuses a second copy of the secret smuggled in this field.
  */
 const MAX_VERIFIER_PLAINTEXT_BYTES = 128;
 const MAX_VERIFIER_DECODED = CONTENT_NONCE_BYTES + CONTENT_TAG_BYTES + MAX_VERIFIER_PLAINTEXT_BYTES;
@@ -141,6 +142,7 @@ export interface CreateSecretInput {
    * never a field of this input.
    */
   readonly verifier?: string;
+  readonly revealProofHash?: string;
 }
 
 export interface CreatedSecret {
@@ -173,6 +175,7 @@ interface SecretRow {
   ciphertext: string;
   password_hash: string | null;
   password_verifier: string | null;
+  reveal_proof_hash: string | null;
 }
 
 interface ConsumedRow {
@@ -247,6 +250,11 @@ export async function createSecret(input: CreateSecretInput): Promise<CreatedSec
   const payload = validatePayload(input.payload);
   const expiresIn = validateExpiryPreset(input.expiresIn);
   const verifier = validateVerifier(input.verifier);
+  const proofHash = input.revealProofHash;
+  if (proofHash !== undefined &&
+      (verifier === undefined || typeof proofHash !== 'string' || !/^[0-9a-f]{64}$/.test(proofHash))) {
+    throw new SecretValidationError('invalidVerifier', 'Invalid reveal proof hash');
+  }
 
   const token = generateToken();
   const controlToken = generateToken();
@@ -261,10 +269,10 @@ export async function createSecret(input: CreateSecretInput): Promise<CreatedSec
   const verifierCiphertext = verifier === undefined ? null : encryptSecret(verifier, key);
 
   const { rows } = await query<{ expires_at: Date }>(
-    `INSERT INTO secrets (token_hash, control_hash, ciphertext, password_hash, password_verifier, expires_at)
-     VALUES ($1, $2, $3, NULL, $4, now() + make_interval(secs => $5::double precision))
+    `INSERT INTO secrets (token_hash, control_hash, ciphertext, password_hash, password_verifier, expires_at, reveal_proof_hash)
+     VALUES ($1, $2, $3, NULL, $4, now() + make_interval(secs => $5::double precision), $6)
      RETURNING expires_at`,
-    [tokenHash, controlHash, ciphertext, verifierCiphertext, EXPIRY_PRESET_SECONDS[expiresIn]],
+    [tokenHash, controlHash, ciphertext, verifierCiphertext, EXPIRY_PRESET_SECONDS[expiresIn], proofHash ?? null],
   );
 
   const expiresAt = rows[0]?.expires_at;
@@ -424,13 +432,13 @@ export async function cancelSecret(controlToken: string): Promise<CancelResult> 
  * A failing password never reaches the decrypt or the delete, so it cannot
  * consume the secret.
  */
-export async function revealSecret(token: string, password?: string): Promise<RevealResult> {
+export async function revealSecret(token: string, password?: string, revealProof?: string): Promise<RevealResult> {
   if (!isValidTokenShape(token)) return { ok: false, reason: 'unavailable' };
 
   const tokenHash = hashToken(token);
 
   const { rows: candidates } = await query<SecretRow>(
-    `SELECT ciphertext, password_hash, password_verifier
+    `SELECT ciphertext, password_hash, password_verifier, reveal_proof_hash
        FROM secrets
       WHERE token_hash = $1
         AND expires_at > now()`,
@@ -439,12 +447,15 @@ export async function revealSecret(token: string, password?: string): Promise<Re
   const candidate = candidates[0];
   if (!candidate) return { ok: false, reason: 'unavailable' };
 
-  // Client-side passwords are checked against the verifier before this call.
-  // The server never learns the password, so it cannot refuse the reveal: a
-  // caller that skips the check obtains ciphertext it still cannot open
-  // without the fragment key and the password, and it does consume the row.
-  // Legacy rows store only a scrypt hash. Those still refuse a wrong password
-  // here, and a wrong password does not reach the delete.
+  // A v2 verifier seals a random proof under the password-derived key. Only
+  // its hash is stored here; possession of the share token alone is insufficient.
+  if (candidate.reveal_proof_hash !== null) {
+    if (typeof revealProof !== 'string' || !isValidTokenShape(revealProof) ||
+        !timingSafeEqual(Buffer.from(hashToken(revealProof), 'hex'), Buffer.from(candidate.reveal_proof_hash, 'hex'))) {
+      return { ok: false, reason: 'bad_password' };
+    }
+  }
+  // Pre-v2 client verifiers and legacy scrypt rows keep their original contract.
   if (candidate.password_verifier === null && candidate.password_hash !== null) {
     const supplied = password ?? '';
     if (!(await verifyPassword(supplied, candidate.password_hash))) {
@@ -468,8 +479,9 @@ export async function revealSecret(token: string, password?: string): Promise<Re
         `DELETE FROM secrets
           WHERE token_hash = $1
             AND expires_at > now()
+            AND reveal_proof_hash IS NOT DISTINCT FROM $2::text
           RETURNING ciphertext, control_hash, expires_at`,
-        [tokenHash],
+        [tokenHash, candidate.reveal_proof_hash],
       );
       const row = rows[0];
       if (row?.control_hash) {

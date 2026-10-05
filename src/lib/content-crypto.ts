@@ -40,10 +40,34 @@ export const PASSWORD_KDF_ITERATIONS = 600_000;
 export const PASSWORD_MAX_LENGTH = 512;
 
 /**
- * Plaintext sealed under the password-derived key and stored so a wrong
- * password can be rejected before the secret itself is deleted.
+ * Legacy verifier plaintext, retained so existing v1 links remain readable.
  */
 export const PASSWORD_VERIFIER_TEXT = 'echovalue-secrets-verifier-v1';
+const PASSWORD_PROOF_PREFIX = 'echovalue-secrets-verifier-v2:';
+
+/** The proof is independent of the content key; its hash cannot authorize reveal. */
+export async function createPasswordVerifier(key: ContentBytes): Promise<{
+  verifier: string;
+  revealProofHash: string;
+}> {
+  const proof = encodeBase64Url(crypto.getRandomValues(new Uint8Array(32)));
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(proof)));
+  return {
+    verifier: await encryptPayload(PASSWORD_PROOF_PREFIX + proof, key),
+    revealProofHash: Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join(''),
+  };
+}
+
+/** Only a decrypted v2 verifier releases a proof. v1 links remain readable. */
+export async function openPasswordVerifier(verifier: string, key: ContentBytes): Promise<string | undefined> {
+  const opened = await decryptPayload(verifier, key);
+  if (opened === PASSWORD_VERIFIER_TEXT) return undefined;
+  if (opened.startsWith(PASSWORD_PROOF_PREFIX)) {
+    const proof = opened.slice(PASSWORD_PROOF_PREFIX.length);
+    if (decodeBase64Url(proof)?.byteLength === 32) return proof;
+  }
+  throw new Error('Invalid password verifier');
+}
 
 const PASSWORD_HKDF_INFO = new TextEncoder().encode('echovalue-secrets-v1');
 const SHARE_TOKEN_SHAPE = new RegExp(`^[A-Za-z0-9_-]{${SHARE_TOKEN_LENGTH}}$`);

@@ -17,7 +17,7 @@ const t = getDictionary(Astro.locals.locale);
 
 <script>
   import {
-    PASSWORD_VERIFIER_TEXT,
+    createPasswordVerifier,
     controlUrl,
     derivePasswordKey,
     encodeShareFragment,
@@ -286,21 +286,23 @@ const t = getDictionary(Astro.locals.locale);
         const key = generateContentKey();
         let sealingKey = key;
         let verifier: string | undefined;
+        let revealProofHash: string | undefined;
         if (suppliedPassword.length > 0) {
           const salt = generatePasswordSalt();
           sealingKey = await derivePasswordKey(key, suppliedPassword, salt);
-          verifier = await encryptPayload(PASSWORD_VERIFIER_TEXT, sealingKey);
+          ({ verifier, revealProofHash } = await createPasswordVerifier(sealingKey));
           keyFragment = encodeShareFragment(key, salt);
         } else {
           keyFragment = encodeShareFragment(key);
         }
         const payload = await encryptPayload(secret.value, sealingKey);
 
-        const body: { payload: string; expiresIn: string; verifier?: string } = {
+        const body: { payload: string; expiresIn: string; verifier?: string; revealProofHash?: string } = {
           payload,
           expiresIn: preset,
         };
         if (verifier) body.verifier = verifier;
+        if (revealProofHash) body.revealProofHash = revealProofHash;
 
         const response = await fetch('/api/secrets', {
           method: 'POST',

@@ -47,9 +47,16 @@ test('encrypts before transmission, preserves inert text, and never consumes thr
   await expect(page.locator('#open-form')).toHaveCount(0);
 });
 
-test('rejects a wrong password without consumption and clears password after creation reset', async ({ page }) => {
+test('rejects password and direct API bypasses without consumption and clears password after creation reset', async ({ page, request }) => {
   const password = 'synthetic-browser-password';
-  const { share, control } = await create(page, 'protected synthetic content', password);
+  const { share, control, token } = await create(page, 'protected synthetic content', password);
+  for (const revealProof of [undefined, 'x'.repeat(43)]) {
+    const response = await request.post('/api/secrets/reveal', {
+      data: { token, revealProof },
+      headers: { origin: new URL(share).origin },
+    });
+    expect(response.status()).toBe(403);
+  }
   await page.locator('#result-another').click();
   await expect(page.locator('#create-password')).toHaveValue('');
   await expect(page.locator('#result-password')).toHaveValue('');

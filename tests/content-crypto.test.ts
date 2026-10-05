@@ -6,6 +6,7 @@
  * in the link fragment. If any of these tests fail, the whole design is void.
  */
 import { describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
 import {
   CONTENT_KEY_BYTES,
   CONTENT_KEY_LENGTH,
@@ -14,6 +15,8 @@ import {
   PASSWORD_KDF_ITERATIONS,
   PASSWORD_MAX_LENGTH,
   PASSWORD_VERIFIER_TEXT,
+  createPasswordVerifier,
+  openPasswordVerifier,
   decodeBase64Url,
   decodeContentKey,
   decodeShareFragment,
@@ -317,6 +320,24 @@ describe('share links', () => {
 });
 
 describe('password-derived content key', () => {
+  it('releases an independent authorization proof only after decrypting the password verifier', async () => {
+    const key = generateContentKey();
+    const salt = generatePasswordSalt();
+    const derived = await derivePasswordKey(key, 'correct horse', salt);
+    const { verifier, revealProofHash } = await createPasswordVerifier(derived);
+    const proof = await openPasswordVerifier(verifier, derived);
+    expect(proof).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(createHash('sha256').update(proof!).digest('hex')).toBe(revealProofHash);
+    expect(proof).not.toBe(encodeContentKey(key));
+    expect(proof).not.toBe(encodeContentKey(derived));
+    await expect(openPasswordVerifier(verifier, key)).rejects.toThrow();
+    await expect(openPasswordVerifier(verifier, await derivePasswordKey(key, 'wrong horse', salt))).rejects.toThrow();
+    const legacy = await encryptPayload(PASSWORD_VERIFIER_TEXT, derived);
+    expect(await openPasswordVerifier(legacy, derived)).toBeUndefined();
+    for (const text of ['unexpected', 'echovalue-secrets-verifier-v2:short']) {
+      await expect(openPasswordVerifier(await encryptPayload(text, derived), derived)).rejects.toThrow();
+    }
+  });
   it('uses the OWASP PBKDF2 iteration floor', () => {
     expect(PASSWORD_KDF_ITERATIONS).toBeGreaterThanOrEqual(600_000);
     expect(PASSWORD_MAX_LENGTH).toBe(512);
