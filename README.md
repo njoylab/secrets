@@ -239,6 +239,25 @@ timer, for example every hour:
   same applies to receipts, which record only the fact and the time of a read, not
   the content.
 
+## Legal documents
+
+`/privacy` and `/terms` are the privacy policy and the terms of use, in both
+languages like everything else. The prose lives in `src/lib/legal.ts`, one string
+per language; `src/layouts/LegalLayout.astro` only renders it. A revision is a
+diff in one place, and nothing legal is written inside an `.astro` file.
+
+Inline links are written `[[token]]` and resolved by `resolveLegalText`, which
+returns text and links as separate parts so the page renders prose as text. The
+five tokens and their labels are in `LEGAL_LINKS`; `tests/legal.test.ts` fails on
+an unknown or unused token. The operator identity — name, VAT number, contact
+address and the umbrella documents on the operator's main site — is the `OPERATOR`
+constant at the top of the same file.
+
+The documents describe what the code does: hashed tokens, the browser-side
+ciphertext, the retention of `scripts/cleanup.mjs`, and the two residual limits
+below. Where the implementation cannot back a promise they say so, so a revision
+must keep matching the code rather than the intention.
+
 ## Local test database
 
 The integration suite requires a real PostgreSQL; there is no in-memory

@@ -5,9 +5,11 @@ import LanguageSwitcher from '../components/LanguageSwitcher.astro';
 
 interface Props {
   title: string;
+  /** Overridden by the legal pages, whose summary describes those documents. */
+  description?: string;
 }
 
-const { title } = Astro.props;
+const { title, description } = Astro.props;
 const locale = Astro.locals.locale;
 const t = getDictionary(locale);
 // Language links return to the current path, query string included.
@@ -21,7 +23,7 @@ const next = `${Astro.url.pathname}${Astro.url.search}`;
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <title>{title} · {t.meta.title}</title>
-    <meta name="description" content={t.meta.description} />
+    <meta name="description" content={description ?? t.meta.description} />
     <meta name="robots" content={t.meta.robots} />
     <meta name="referrer" content="no-referrer" />
     <meta name="color-scheme" content="dark" />
@@ -36,7 +38,13 @@ const next = `${Astro.url.pathname}${Astro.url.search}`;
       <main id="main" tabindex="-1">
         <slot />
       </main>
-      <footer class="site-footer">{t.footer.limits}</footer>
+      <footer class="site-footer">
+        <p class="site-footer-limits">{t.footer.limits}</p>
+        <nav class="site-footer-nav" aria-label={t.footer.linksLabel}>
+          <a href="/privacy">{t.footer.privacy}</a>
+          <a href="/terms">{t.footer.terms}</a>
+        </nav>
+      </footer>
     </div>
   </body>
 </html>

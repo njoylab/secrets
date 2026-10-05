@@ -104,7 +104,15 @@ export type Dictionary = {
     serverError: string;
     badRequest: string;
   };
-  footer: { limits: string };
+  legal: {
+    updated: string;
+  };
+  footer: {
+    limits: string;
+    linksLabel: string;
+    privacy: string;
+    terms: string;
+  };
 };
 
 /** Keys accepted by the JSON error responses. */
@@ -205,7 +213,14 @@ const it: Dictionary = {
     badRequest: 'Richiesta non valida',
   },
 
-  footer: { limits: 'Limite 50 KiB · una sola lettura' },
+  legal: { updated: 'Ultimo aggiornamento' },
+
+  footer: {
+    limits: 'Limite 50 KiB · una sola lettura',
+    linksLabel: 'Documenti legali',
+    privacy: 'Informativa privacy',
+    terms: 'Condizioni d\'uso',
+  },
 };
 
 const en: Dictionary = {
@@ -303,7 +318,14 @@ const en: Dictionary = {
     badRequest: 'Invalid request',
   },
 
-  footer: { limits: '50 KiB limit · one read only' },
+  legal: { updated: 'Last updated' },
+
+  footer: {
+    limits: '50 KiB limit · one read only',
+    linksLabel: 'Legal documents',
+    privacy: 'Privacy policy',
+    terms: 'Terms of use',
+  },
 };
 
 const dictionaries: Record<Locale, Dictionary> = { it, en };
