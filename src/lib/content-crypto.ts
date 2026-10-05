@@ -9,7 +9,7 @@
  * the deployment key, so a database dump is still not the text.
  *
  * Only Web Crypto and `atob`/`btoa` are used: the same code runs in the browser
- * and under Node 20, which is what lets the test suite prove the round trip.
+ * and under Node, which is what lets the test suite prove the round trip.
  *
  * Wire format: `base64url(nonce || ciphertext || tag)`, which is the same
  * envelope `encryptSecret` uses, so the two layers are indistinguishable.

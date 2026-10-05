@@ -36,7 +36,11 @@ if (rawRetention !== undefined && rawRetention.trim() !== '') {
 // is raised to the longest rate limit window.
 const { configuredSeconds, effectiveSeconds } = counterRetention(process.env);
 
-const client = new pg.Client({ connectionString: databaseUrl });
+const client = new pg.Client({
+  connectionString: databaseUrl,
+  connectionTimeoutMillis: 10_000,
+  options: '-c statement_timeout=60000 -c lock_timeout=5000',
+});
 await client.connect();
 
 try {

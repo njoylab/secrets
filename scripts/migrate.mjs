@@ -21,10 +21,13 @@ function fail(message) {
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) fail('DATABASE_URL is required');
 
-const client = new pg.Client({ connectionString: databaseUrl });
+const client = new pg.Client({ connectionString: databaseUrl, connectionTimeoutMillis: 10_000 });
 await client.connect();
 
 try {
+  // Serialize deploys before reading the applied versions.
+  await client.query("SET statement_timeout = '60s'");
+  await client.query('SELECT pg_advisory_lock(731824991)');
   await client.query(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
         version    text        PRIMARY KEY,
@@ -51,9 +54,9 @@ try {
       await client.query('COMMIT');
       process.stdout.write(`applied ${file}\n`);
       count += 1;
-    } catch (error) {
+    } catch {
       await client.query('ROLLBACK');
-      process.stderr.write(`failed ${file}: ${error instanceof Error ? error.message : error}\n`);
+      process.stderr.write(`failed ${file}; transaction rolled back\n`);
       process.exit(1);
     }
   }

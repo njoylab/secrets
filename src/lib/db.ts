@@ -18,7 +18,7 @@ export function getPool(): pg.Pool {
       connectionTimeoutMillis: 10_000,
       // Keep numeric/date columns as strings unless explicitly cast, to avoid
       // silent precision loss and timezone drift in expiry comparisons.
-      options: '-c timezone=UTC',
+      options: '-c timezone=UTC -c statement_timeout=10000 -c lock_timeout=5000',
     });
     pool.on('error', () => {
       // Idle client errors are recoverable: the pool discards the client.

@@ -1,7 +1,6 @@
 import { defineMiddleware } from 'astro:middleware';
-import { hstsHeaderValue, SENSITIVE_HEADERS } from './lib/http.ts';
+import { errorResponse, hstsHeaderValue, RESOLVED_IP_HEADER, SENSITIVE_HEADERS } from './lib/http.ts';
 import { detectLocale, getDictionary, LOCALE_COOKIE, normalizeLocale, type Locale } from './lib/i18n.ts';
-import { RESOLVED_IP_HEADER } from './lib/http.ts';
 
 /**
  * Read the client IP resolved by `server.mjs`.
@@ -24,7 +23,21 @@ export const onRequest = defineMiddleware(async (context, next) => {
   context.locals.locale = locale;
   context.locals.peerAddress = resolveRequestClientIp(context.request);
 
-  const response = await next();
+  const started = performance.now();
+  let response: Response;
+  try {
+    response = await next();
+  } catch {
+    response = errorResponse(locale, 'serverError', 503);
+  }
+  if (process.env.REQUEST_METRICS === 'true') {
+    // Route templates contain no tokens. Never log URLs, headers or errors.
+    const route = context.routePattern || 'unmatched';
+    process.stdout.write(`${JSON.stringify({
+      event: 'request', route, method: context.request.method,
+      status: response.status, durationMs: Math.round(performance.now() - started),
+    })}\n`);
+  }
   response.headers.set('content-language', locale);
 
   // The whole service is unindexable and uncacheable: pages hold no secret, but

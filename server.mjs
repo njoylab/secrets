@@ -95,21 +95,47 @@ const server =
           cert: fs.readFileSync(process.env.SERVER_CERT_PATH),
         },
         (req, res) => {
-          sanitize(req);
-          handler(req, res);
+          handleRequest(req, res);
         },
       )
     : http.createServer((req, res) => {
-        sanitize(req);
-        handler(req, res);
+        handleRequest(req, res);
       });
+
+function handleRequest(req, res) {
+  const length = req.headers['content-length'];
+  if (length !== undefined && (!/^\d+$/.test(length) || Number(length) > 72 * 1024)) {
+    res.writeHead(413, { 'cache-control': 'no-store', connection: 'close' });
+    res.end();
+    return;
+  }
+  sanitize(req);
+  // Reject malformed authority before the adapter tries to construct its URL.
+  try {
+    if (!req.headers.host || /[\s/@\\?#]/.test(req.headers.host)) throw new Error();
+    new URL(`http://${req.headers.host}`);
+  } catch {
+    res.writeHead(400, { 'cache-control': 'no-store', connection: 'close' });
+    res.end();
+    return;
+  }
+  handler(req, res);
+}
+
+server.headersTimeout = 15_000;
+server.requestTimeout = 30_000;
+server.setTimeout(30_000, (socket) => socket.destroy());
+server.maxHeadersCount = 100;
 
 server.listen(port, host, () => {
   process.stdout.write(`secrets listening on http://${host}:${port}\n`);
 });
 
 const shutdown = () => {
+  // Do not let an idle keep-alive connection block deployment indefinitely.
+  server.closeIdleConnections();
   server.close(() => process.exit(0));
+  setTimeout(() => process.exit(1), 15_000).unref();
 };
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);

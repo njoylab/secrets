@@ -61,13 +61,27 @@ export async function readJsonBody(
   const declaredLength = request.headers.get('content-length');
   if (declaredLength && Number.parseInt(declaredLength, 10) > maxBytes) return null;
 
-  let raw: string;
+  if (!request.body) return null;
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
   try {
-    raw = await request.text();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(value);
+    }
   } catch {
     return null;
+  } finally {
+    reader.releaseLock();
   }
-  if (Buffer.byteLength(raw, 'utf8') > maxBytes) return null;
+  const raw = Buffer.concat(chunks, total).toString('utf8');
 
   try {
     const parsed: unknown = JSON.parse(raw);

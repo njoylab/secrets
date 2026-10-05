@@ -25,7 +25,7 @@ const allowedDomains = (process.env.ALLOWED_HOSTS ?? 'localhost,127.0.0.1')
 // SSR mode: every page and endpoint is rendered by the Node server at request time.
 export default defineConfig({
   output: 'server',
-  adapter: node({ mode: 'standalone' }),
+  adapter: node({ mode: 'standalone', bodySizeLimit: 72 * 1024 }),
   security: {
     checkOrigin: true,
     allowedDomains,

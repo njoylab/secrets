@@ -16,6 +16,7 @@ export const SENSITIVE_HEADERS: Readonly<Record<string, string>> = Object.freeze
   'referrer-policy': 'no-referrer',
   'x-content-type-options': 'nosniff',
   'x-frame-options': 'DENY',
+  'content-security-policy': "base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'",
   referrer: 'no-referrer',
 });
 

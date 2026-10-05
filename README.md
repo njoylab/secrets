@@ -12,13 +12,13 @@ secret (`pending`, `read`, `expired`, `cancelled`) and can cancel it. The share
 link is redeemed at most once: consumption is a conditional
 `DELETE ... RETURNING` executed by the database, so concurrent readers cannot
 both obtain the content. Secrets expire after 1 hour to 30 days (default 7) and
-an optional password can gate the read. The app is an Astro 5 SSR project served
+an optional password can gate the read. The app is an Astro 7 SSR project served
 by the Node adapter, backed by an external PostgreSQL. No Docker, no Redis, no
 separate backend.
 
 ## Requirements
 
-- Node.js >= 20.11 (`engines.node`). The lockfile and the current toolchain are on Node 24.
+- Node.js >= 22.12 (`engines.node`). CI and the current toolchain use Node 24.
 - A reachable PostgreSQL instance (any supported version; only core features are used: `make_interval`, `ON CONFLICT`, `timestamptz`).
 
 ## Setup
@@ -110,6 +110,7 @@ once. With a password, the link alone is not enough.
 | `RATE_LIMIT_REVEAL_WINDOW_SECONDS` | no | `300` | Window length for the reveal counter and, separately, for the cancel counter. |
 | `COOKIE_SECURE` | no | `true` when `NODE_ENV=production`, otherwise `false` | `Secure` attribute on the locale cookie. |
 | `CLEANUP_KEEP_COUNTER_SECONDS` | no | `3600` | Read only by `npm run cleanup`: age after which idle rate limit counters are deleted. |
+| `REQUEST_METRICS` | no | `false` | Set to `true` for JSON route/status/duration metrics. Never includes request URLs, bodies, tokens, IPs or raw errors. |
 
 ### Hostnames and client addresses
 
@@ -179,7 +180,7 @@ timer, for example every hour:
 
 ## Deployment on Node
 
-- `npm run build` emits the server bundle at `dist/server/entry.mjs`; `npm start` runs `server.mjs`, which imports that bundle.
+- `npm run build` emits the server bundle at `dist/server/entry.mjs`; `npm start` applies migrations and then runs `server.mjs`, which imports that bundle. Migration failure prevents the listener from starting.
 - `server.mjs` is required in production, not just a convenience: it is what makes forwarding headers and the client IP trustworthy (see above).
 - Run it behind a TLS-terminating reverse proxy, set `COOKIE_SECURE=true`, and
   send `Strict-Transport-Security` from that proxy. The app also sets HSTS on
@@ -187,7 +188,7 @@ timer, for example every hour:
   be rewritten into a page that reads the fragment.
 - Set the environment variables in the process manager (systemd `Environment=`,
   PM2, container env) rather than in a file, and keep `.env` out of the deployment.
-- Run `npm run migrate` as a deploy step before switching traffic.
+- Start with `npm start` so migrations complete before switching traffic. `npm run migrate` remains available for an explicit migration step.
 - Schedule `npm run cleanup`.
 - The adapter listens on `HOST`/`PORT` (default port `8080`). `HOST` defaults to
   `127.0.0.1`, so the process is reachable only through a proxy on the same
@@ -297,5 +298,98 @@ npm test
 point it at a production database. The suite lives in `tests/`, uses
 `tests/setup.ts` as its setup file, and runs serially against a single database.
 
-`tests/content-crypto.test.ts` and `tests/api.test.ts` need no database, and are
-the fastest way to check a change to the encryption or the JSON contract.
+The API tests require this database too: they execute real route handlers and
+persist real fixtures. Even pure crypto files currently run the shared database
+setup. Use the isolated database for every invocation of this Vitest config.
+
+## Release checks and the platform operations
+
+the platform manages the deployment on the hosting provider. CI verifies typecheck,
+PostgreSQL tests, build, browser flows and the production dependency audit.
+The workflow has not yet run on GitHub; local checks are not proof of a CI-gated
+release. The current Git webhook can deploy a push before CI finishes. Deploy
+only a verified revision, or configure a CI gate before relying on automatic releases.
+
+Browser tests use the built Node server on loopback with Chromium, Firefox and
+WebKit, on desktop and mobile. They truncate fixtures and refuse targets other
+than a local `*_test` database. Apply migrations to that isolated database first:
+
+```sh
+ALLOWED_HOSTS=localhost,127.0.0.1 npm run build
+npx playwright install chromium firefox webkit
+TEST_DATABASE_URL=postgres://USER:PASSWORD@127.0.0.1:5432/secrets_test npm run test:browser
+```
+
+The Node entry point rejects declared bodies above 72 KiB. The adapter and JSON
+reader also bound streamed bodies. Header timeout is 15 seconds; request/socket
+timeouts are 30 seconds. Application SQL statements time out after 10 seconds,
+lock waits after 5 seconds, and cleanup statements after 60 seconds. Migrations
+serialize with an advisory lock. `npm start` migrates before accepting traffic.
+
+Configure these settings together during the approved the platform release:
+
+- Build with `NODE_VERSION=24` and `ALLOWED_HOSTS=secrets.example.com`.
+  Use `npm start`, replacing `node server.mjs` and the post-deploy migration hook.
+  Ensure build dependencies are installed. Bind to the private network for the
+  the platform proxy; do not expose the app port publicly. Verify `TRUSTED_PROXIES`
+  against the actual controlled addresses and the full Cloudflare forwarding chain.
+- Health check: HTTP GET `/api/health`, port 3000 for this resource, expected 200,
+  interval 60s, timeout 15s, three retries, start period 30s. The endpoint checks
+  the database/schema without consuming secrets and returns only `ok`; failure
+  returns 503. Bound public polling at the proxy to protect the connection pool.
+- Schedule `node scripts/cleanup.mjs` hourly in the app working directory with
+  its runtime environment. Monitor failures and missed runs, deployment errors,
+  unhealthy resources and failed/missing backups through the existing the platform
+  notification channel. Verify delivery; use a two-day missing-backup alert for
+  a daily schedule.
+- Preserve `no-store`, `no-referrer`, `DENY` and the app CSP through the proxy
+  and Cloudflare. Set HSTS at the HTTPS edge and bound bodies before forwarding.
+  Add measured edge rate limits: PostgreSQL quotas do not stop volumetric attacks.
+- Redact share/control path tokens from proxy/CDN logs; never log request bodies.
+  Verify age-based log deletion within seven days. `REQUEST_METRICS=true` emits
+  only route templates, method, status and duration, without raw errors or IPs.
+- Verify backup scope, successful execution and recovery. The seven-day target
+  requires checking local/S3 copies, exported files, VM snapshots and provider
+  retention separately. Job-based retention does not prove deletion when jobs
+  stop. Preserve the runtime encryption key outside the database and its backups.
+
+`npm run check:live` checks the public homepage headers and readiness through
+Cloudflare, visiting no secret URLs and performing no writes. Set
+`MONITOR_ORIGIN` only to another HTTPS origin if needed. Failures produce check
+names and a nonzero exit status. Correct local headers are not public proof.
+
+**Recovery:** an old database backup can resurrect consumed secrets. Restore
+only offline. Without a complete, independently verified record of subsequent
+consumptions/cancellations, discard restored pending payloads before reopening
+traffic. This also invalidates unread links. Require explicit operator approval
+for that destructive recovery step. Never restore the database just to roll back
+code; retain the previous artifact/config and use forward-compatible migrations.
+Changing `SECRET_ENCRYPTION_KEY` invalidates stored payloads.
+
+Inspection on 5 October 2026 found no application health check or scheduled
+cleanup, unrestricted CPU/memory, and migrations configured after deploy. The
+shared PostgreSQL resource found in the platform has daily all-databases backups with
+successful executions, local retention 3 days, S3 enabled with retention 14 days,
+and missing-backup alerts disabled. Confirm it hosts this app before changing
+scope; its shared retention affects other databases and exceeds the seven-day
+policy target. No the platform setting was changed during inspection.
+
+Public HTTP redirected to HTTPS and cache was disabled, but response headers
+were `Referrer-Policy: same-origin`, `X-Frame-Options: SAMEORIGIN`, with no HSTS
+or CSP. The page already has a `no-referrer` meta tag. The new readiness route
+is not deployed. No production secret was created or consumed.
+
+Local proof: 424 PostgreSQL/unit tests and 40 browser cases passed, with clean
+build/typecheck and no known npm vulnerabilities. An isolated restore drill
+reproduced resurrection and verified offline payload removal prevents it. Outage
+checks returned safe 503 responses and recovered without losing a pending fixture;
+chunked body limits, malformed-host rejection and token-free metrics/errors
+passed. A 100-request local readiness burst had p95 about 40 ms, not a production
+capacity estimate. Actual the platform restore, notification delivery, log retention
+and edge protections remain unverified. Password consumption protection remains
+unchanged: a direct API caller with the share token can consume ciphertext without
+performing the browser password check.
+
+References: [the platform backups](https://example.com/docs/databases/backups),
+[proxy middleware](https://example.com/docs/core/networking/proxy/traefik/custom-middlewares),
+[Node](https://railpack.com/languages/node/).

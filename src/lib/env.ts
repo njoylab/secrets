@@ -28,9 +28,10 @@ const ENCRYPTION_KEY_BYTES = 32;
 
 function readPositiveInt(raw: string | undefined, fallback: number): number {
   if (raw === undefined || raw.trim() === '') return fallback;
-  const parsed = Number.parseInt(raw, 10);
+  if (!/^\d+$/.test(raw.trim())) throw new ConfigError('Expected a positive integer');
+  const parsed = Number(raw.trim());
   if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-    throw new ConfigError(`Expected a positive integer, received "${raw}"`);
+    throw new ConfigError('Expected a positive integer');
   }
   return parsed;
 }
@@ -65,6 +66,9 @@ function parseEncryptionKey(raw: string | undefined): Buffer {
     throw new ConfigError(
       `SECRET_ENCRYPTION_KEY must decode to ${ENCRYPTION_KEY_BYTES} bytes, got ${key.byteLength}`,
     );
+  }
+  if (key.toString('base64url') !== raw.trim()) {
+    throw new ConfigError('SECRET_ENCRYPTION_KEY must be canonical base64url');
   }
   return key;
 }
