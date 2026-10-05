@@ -34,7 +34,7 @@ export const OPERATOR = {
   siteTermsUrl: 'https://example.com/terms',
 } as const;
 
-export type LegalLinkKey = 'privacy' | 'terms' | 'sitePrivacy' | 'siteTerms' | 'contact';
+export type LegalLinkKey = 'privacy' | 'terms' | 'sitePrivacy' | 'siteTerms' | 'contact' | 'turnstilePrivacy' | 'cloudflareCookies';
 
 export interface LegalLinkPart {
   readonly href: string;
@@ -48,12 +48,16 @@ export const LEGAL_LINKS: Readonly<Record<LegalLinkKey, LegalLinkPart>> = {
   sitePrivacy: { href: OPERATOR.sitePrivacyUrl, label: OPERATOR.sitePrivacyUrl },
   siteTerms: { href: OPERATOR.siteTermsUrl, label: OPERATOR.siteTermsUrl },
   contact: { href: `mailto:${OPERATOR.contactEmail}`, label: OPERATOR.contactEmail },
+  turnstilePrivacy: { href: 'https://www.cloudflare.com/turnstile-privacy-policy/', label: 'informativa Turnstile' },
+  cloudflareCookies: { href: 'https://developers.cloudflare.com/fundamentals/reference/policies-compliances/cloudflare-cookies/', label: 'cookie Cloudflare' },
 };
 
-/** English wording of the two in-app tokens, which are the only ones translated. */
+/** Localized labels for links whose wording differs between languages. */
 const LINK_LABELS_EN: Readonly<Partial<Record<LegalLinkKey, string>>> = {
   privacy: 'privacy policy',
   terms: 'terms of use',
+  turnstilePrivacy: 'Turnstile privacy notice',
+  cloudflareCookies: 'Cloudflare cookies',
 };
 
 /** The words a token stands for in a sentence. */
@@ -113,16 +117,15 @@ export type LegalDocumentKind = 'privacy' | 'terms';
 
 const privacyIt: LegalDocument = {
   title: 'Informativa privacy',
-  summary:
-    'Nessun account e nessun tracciamento: il segreto viene cifrato nel tuo browser, sul server resta solo in forma cifrata e viene cancellato alla prima lettura.',
+  summary: 'Quali dati trattiamo, per quanto tempo e come esercitare i tuoi diritti.',
   updated: '2026-10-05',
   sections: [
     {
-      heading: 'Titolare del trattamento',
+      heading: 'Titolare e finalità',
       blocks: [
         {
           kind: 'p',
-          text: 'Il titolare è Example Operator S.r.l., P.IVA IT00000000000, contattabile a [[contact]]. L\'informativa riguarda solo questo servizio; per il sito echoValue valgono le informative generali pubblicate su [[sitePrivacy]] e le condizioni generali su [[siteTerms]].',
+          text: "Il titolare è Example Operator S.r.l., P.IVA IT00000000000. Contatti: [[contact]]. Trattiamo i dati per fornire il servizio e prevenire abusi, sulla base del legittimo interesse (art. 6.1.f GDPR). Non servono account e non facciamo marketing, profilazione o decisioni automatizzate.",
         },
       ],
     },
@@ -132,81 +135,67 @@ const privacyIt: LegalDocument = {
         {
           kind: 'list',
           items: [
-            'il segreto, cifrato con AES-256-GCM nel browser e conservato anche in una seconda cifratura sotto una chiave tenuta fuori dal database: il testo in chiaro non arriva mai al server;',
-            'le impronte SHA-256 del token di condivisione e del token di controllo, mai i token per esteso;',
-            'se è stata impostata una password, un breve controllo cifrato; per i segreti più vecchi un hash scrypt con sale. La password non viene mai inviata al server;',
-            'orario di creazione e di scadenza del segreto;',
-            'il tuo indirizzo IP, usato solo come soggetto dei contatori che limitano la creazione e i tentativi di lettura, conservato in chiaro per la durata della finestra di conteggio;',
-            'una ricevuta che registra solo l\'evento e l\'orario con cui il segreto è stato letto, scaduto o annullato, così il link di controllo continua a rispondere;',
-            'un cookie che memorizza la sola lingua scelta, per un anno.',
+            'Contenuto cifrato, impronte dei token, dati di verifica della password e date di creazione e scadenza.',
+            'Stato e data di lettura, annullamento o scadenza, consultabili dal link di controllo.',
+            'Indirizzo IP in chiaro nei contatori che limitano creazioni, letture e annullamenti.',
+            'Un cookie per ricordare la lingua scelta, valido un anno. Le protezioni Cloudflare possono usare altri cookie tecnici, secondo le funzioni attive: [[cloudflareCookies]].',
           ],
         },
       ],
     },
     {
-      heading: 'Base giuridica',
+      heading: 'Protezione del segreto',
       blocks: [
         {
           kind: 'p',
-          text: 'I dati tecnici sopra elencati sono trattati sulla base del legittimo interesse del titolare (art. 6, comma 1, lettera f del Regolamento UE 2016/679): erogare il servizio e proteggerlo da abusi. Non trattiamo dati per finalità di marketing, non usiamo profilazione né decisioni automatizzate. I dati personali che includi in un segreto restano sotto tuo controllo: ne sei il titolare del trattamento, come mittente.',
+          text: 'Il browser cifra il testo prima di inviarlo. La chiave resta nel link, dopo #, e non arriva al server. La password dei nuovi segreti resta nel browser; per quelli precedenti il server verifica un hash. Chi ha il link completo può aprire il segreto, con la password se impostata.',
+        },
+        {
+          kind: 'p',
+          text: 'È cifratura lato client, non cifratura end-to-end verificata da una revisione indipendente. Un dispositivo compromesso o una modifica malevola del codice della pagina possono esporre il contenuto.',
         },
       ],
     },
     {
-      heading: 'Protezione del contenuto',
-      blocks: [
-        {
-          kind: 'p',
-          text: 'La chiave che apre il segreto è generata nel browser e resta nel frammento del link, dopo il #. Non viene inviata al server, quindi non compare in alcuna richiesta, intestazione, log o riga del database. Chi possiede il link può leggere il segreto, salvo che sia stata impostata una password.',
-        },
-        {
-          kind: 'p',
-          text: 'Questa è cifratura lato client, non cifratura end-to-end verificata da una revisione indipendente: un operatore che sostituisse il codice della pagina potrebbe leggere i segreti, e un dispositivo compromesso può farlo senza che nulla cambi lato server. Non usare il servizio per dati sottoposti a particolari obblighi di protezione.',
-        },
-      ],
-    },
-    {
-      heading: 'Tempi di conservazione',
+      heading: 'Conservazione',
       blocks: [
         {
           kind: 'list',
           items: [
-            'il segreto: fino alla prima lettura, all\'annullamento o alla scadenza scelta, comunque al più trenta giorni;',
-            'la ricevuta: sette giorni dopo la scadenza o la chiusura, poi viene rimossa;',
-            'i contatori di rate limit: per la durata della finestra di conteggio, un\'ora nella configurazione prevista;',
-            'il cookie della lingua: un anno.',
+            'Segreti: cancellati alla lettura o all’annullamento. Alla scadenza, entro 30 giorni dalla creazione, diventano inaccessibili e vengono rimossi dalla pulizia periodica.',
+            'Stato del segreto: conservato fino alla scadenza originaria o a sette giorni dalla chiusura, se successivi; poi rimosso dalla pulizia periodica.',
+            'Contatori IP: rimossi dalla pulizia dopo il periodo configurato, almeno pari alla finestra di conteggio più lunga (un’ora con i valori predefiniti).',
           ],
         },
         {
           kind: 'p',
-          text: 'La cancellazione di una riga la rimuove dal database ma non dai registri WAL né dalle copie di backup già eseguite: la cancellazione dai backup dipende dalla politica del titolare e non può essere garantita dall\'applicazione. Non è quindi possibile confermare che un segreto cancellato non esista più in un backup cifrato.',
+          text: 'La cancellazione non elimina subito le copie nei registri del database (WAL) o nei backup. Per log tecnici e backup sotto il nostro controllo, la politica prevista è di massimo 7 giorni; la sua applicazione sull’infrastruttura resta da verificare. I dati conservati autonomamente dai fornitori seguono le rispettive politiche.',
         },
       ],
     },
     {
-      heading: 'Log, cookie e terzi',
+      heading: 'Log e fornitori',
       blocks: [
         {
           kind: 'p',
-          text: 'L\'applicazione non scrive log di accesso e non registra contenuti, password, token o corpi delle richieste. Dietro di essa un reverse proxy e un\'infrastruttura di hosting possono registrare indirizzo IP, data e ora, percorso richiesto e user agent, secondo la propria politica di conservazione: quei log non contengono il contenuto dei segreti. L\'unico cookie impostato è quello della lingua. I dati possono essere trattati dai fornitori di infrastruttura del titolare (hosting, database, TLS, posta elettrica), che non ricevono mai segreti in chiaro né li usano per finalità pubblicitarie. Se un fornitore tratta dati fuori dallo Spazio economico europeo, valgono le garanzie del capitolo V del Regolamento.',
+          text: 'L’applicazione non registra contenuti, password, token o corpi delle richieste. Proxy e hosting possono registrare IP, orari, percorsi richiesti e browser; i percorsi possono contenere i token, ma non la chiave dopo #. I server sono ospitati su il hosting provider, in a country the European Commission recognises as providing adequate data protection. Cloudflare gestisce il DNS e fa da proxy al traffico web, trattando indirizzi IP e metadati delle richieste. Questi fornitori possono trattare i dati tecnici necessari ai rispettivi servizi. Eventuali ulteriori trasferimenti fuori dallo Spazio economico europeo richiedono le garanzie previste dal GDPR; puoi chiedere dettagli a [[contact]].',
+        },
+        {
+          kind: 'p',
+          text: 'È prevista la possibile introduzione di Cloudflare Turnstile contro gli abusi, ma non è ancora integrato nell’applicazione. Quando attivo, tratta IP e segnali tecnici del browser per distinguere persone e bot. Cloudflare usa questi segnali anche per migliorare Turnstile, come titolare autonomo: [[turnstilePrivacy]]. L’eventuale cookie cf_clearance dipende dall’attivazione della funzione pre-clearance.',
         },
       ],
     },
     {
-      heading: 'I tuoi diritti',
+      heading: 'Diritti e contatti',
       blocks: [
         {
           kind: 'p',
-          text: 'Puoi chiedere accesso, rettifica, cancellazione, limitazione, portabilità e opposizione, e proporre reclamo all\'autorità di controllo: in Italia il Garante per la protezione dei dati personali, altrove l\'autorità del tuo Paese di residenza. Scrivi a [[contact]] indicando, se possibile, il token del link interessato. Sul contenuto dei segreti le risposte sono necessariamente limitate, perché è cifrato con una chiave che il server non possiede ed è già stato cancellato nella maggior parte dei casi.',
+          text: 'Nei casi previsti dal GDPR puoi chiedere accesso, rettifica, cancellazione, limitazione e portabilità, oppure opporti al trattamento. Scrivi a [[contact]] senza includere il contenuto, la password o il link completo. Non possiamo decifrare o recuperare i segreti. Puoi presentare reclamo al Garante per la protezione dei dati personali o all’autorità competente nel tuo Paese.',
         },
-      ],
-    },
-    {
-      heading: 'Modifiche',
-      blocks: [
         {
           kind: 'p',
-          text: 'La versione in vigore è questa pagina, con la data di aggiornamento in alto. Il titolare può aggiornarla e, se una modifica riduce i tuoi diritti, la comunica prima che diventi efficace. Il servizio è disciplinato dalle [[terms]] e non è destinato a minori.',
+          text: 'Questa informativa riguarda secrets. Per il sito echoValue: [[sitePrivacy]]. Per il servizio: [[terms]]. La data in alto indica l’ultima revisione; le modifiche che incidono sui tuoi diritti saranno comunicate prima di entrare in vigore.',
         },
       ],
     },
@@ -215,16 +204,15 @@ const privacyIt: LegalDocument = {
 
 const privacyEn: LegalDocument = {
   title: 'Privacy policy',
-  summary:
-    'No accounts and no tracking: the secret is encrypted in your browser, the server keeps only the encrypted form, and it is deleted at the first read.',
+  summary: 'What data we process, how long we keep it and how to exercise your rights.',
   updated: '2026-10-05',
   sections: [
     {
-      heading: 'Data controller',
+      heading: 'Controller and purposes',
       blocks: [
         {
           kind: 'p',
-          text: 'The controller is Example Operator S.r.l., VAT IT00000000000, reachable at [[contact]]. This notice covers this service only; for the echoValue site the general notices on [[sitePrivacy]] and the general terms on [[siteTerms]] apply.',
+          text: 'The controller is Example Operator S.r.l., VAT IT00000000000. Contact: [[contact]]. We process data to provide the service and prevent abuse, based on legitimate interest (Article 6(1)(f) GDPR). No account is required. We do not use data for marketing, profiling or automated decision-making.',
         },
       ],
     },
@@ -234,36 +222,24 @@ const privacyEn: LegalDocument = {
         {
           kind: 'list',
           items: [
-            'the secret, encrypted with AES-256-GCM in your browser and then kept under a second layer whose key is held outside the database: the plaintext never reaches the server;',
-            'the SHA-256 fingerprints of the share token and of the control token, never the tokens themselves;',
-            'if a password is set, a short sealed check; for older secrets a salted scrypt hash. The password never reaches the server;',
-            'the creation and expiry times of the secret;',
-            'your IP address, used only as the subject of the counters that limit creation and read attempts, kept in cleartext for the length of the counting window;',
-            'a receipt recording only the event and time a secret was read, expired or cancelled, so the control link keeps answering;',
-            'a cookie storing the language you chose, for one year.',
+            'Encrypted content, token hashes, password verification data, and creation and expiry dates.',
+            'The status and time of a read, cancellation or expiry, available through the control link.',
+            'Your IP address in cleartext in counters that limit creations, reads and cancellations.',
+            'A cookie that remembers your language choice for one year. Cloudflare protections may use other technical cookies depending on the enabled features: [[cloudflareCookies]].',
           ],
         },
       ],
     },
     {
-      heading: 'Legal basis',
+      heading: 'Protecting the secret',
       blocks: [
         {
           kind: 'p',
-          text: 'The technical data above is processed on the controller\'s legitimate interest (Article 6(1)(f) of Regulation (EU) 2016/679): to run the service and protect it from abuse. We do not process data for marketing, and we use no profiling or automated decision-making. Any personal data you include in a secret stays under your control: as the sender you are the data controller for it.',
-        },
-      ],
-    },
-    {
-      heading: 'How the content is protected',
-      blocks: [
-        {
-          kind: 'p',
-          text: 'The key that opens a secret is generated in the browser and stays in the fragment of the link, after the #. It is never sent to the server, so it appears in no request, header, log or database row. Whoever holds the link can read the secret unless a password is set.',
+          text: 'The browser encrypts the text before sending it. The key stays in the link, after #, and never reaches the server. Passwords for new secrets stay in the browser; for older secrets the server checks a hash. Anyone with the complete link can open the secret, with the password if set.',
         },
         {
           kind: 'p',
-          text: 'This is client-side encryption, not end-to-end encryption verified by an independent review: an operator who replaced the page code could read the secrets, and a compromised device can do so with nothing changing on the server. Do not use the service for data subject to specific protection obligations.',
+          text: 'This is not end-to-end encryption verified by an independent review. A compromised device or a malicious change to the page code can expose the content.',
         },
       ],
     },
@@ -273,42 +249,40 @@ const privacyEn: LegalDocument = {
         {
           kind: 'list',
           items: [
-            'the secret: until the first read, a cancellation or the chosen expiry, and at most thirty days;',
-            'the receipt: seven days after the expiry or the closing, then removed;',
-            'the rate limit counters: for the length of the counting window, one hour in the intended configuration;',
-            'the language cookie: one year.',
+            'Secrets: deleted on reading or cancellation. At expiry, within 30 days of creation, they become inaccessible and are removed by periodic cleanup.',
+            'Secret status: kept until the original expiry or seven days after closure, whichever is later; then removed by periodic cleanup.',
+            'IP counters: removed by cleanup after the configured period, at least as long as the longest counting window (one hour with default settings).',
           ],
         },
         {
           kind: 'p',
-          text: 'Deleting a row removes it from the database but not from the write-ahead log or from base backups already taken: removal from backups depends on the controller\'s policy and cannot be guaranteed by the application. We therefore cannot confirm that a deleted secret no longer exists inside an encrypted backup.',
+          text: 'Deletion does not immediately remove copies from database logs (WAL) or backups. For technical logs and backups under our control, the planned policy is a maximum of 7 days; enforcement on the infrastructure remains to be verified. Data retained independently by providers follows their own policies.',
         },
       ],
     },
     {
-      heading: 'Logs, cookies and third parties',
+      heading: 'Logs and providers',
       blocks: [
         {
           kind: 'p',
-          text: 'The application writes no access log and records no content, password, token or request body. A reverse proxy and a hosting stack sit in front of it and may log IP addresses, dates and times, requested paths and user agents under their own retention policy: those logs contain no secret content. The only cookie set is the language one. Data may be processed by the controller\'s infrastructure providers (hosting, database, TLS, e-mail), which never receive secrets in cleartext and never use them for advertising. Where a provider processes data outside the European Economic Area, the safeguards of Chapter V of the Regulation apply.',
+          text: 'The application does not log content, passwords, tokens or request bodies. A proxy and hosting provider may log IP addresses, times, requested paths and browsers; paths may include tokens, but never the key after #. The servers are hosted on the hosting provider, which the European Commission recognises as providing adequate data protection. Cloudflare manages DNS and proxies web traffic, processing IP addresses and request metadata. These providers may process the technical data needed for their respective services. Any further transfers outside the European Economic Area require GDPR safeguards; contact [[contact]] for details.',
+        },
+        {
+          kind: 'p',
+          text: 'Cloudflare Turnstile may be introduced to prevent abuse, but it is not yet integrated into the application. When enabled, it processes IP addresses and technical browser signals to distinguish people from bots. Cloudflare also uses these signals to improve Turnstile as an independent controller: [[turnstilePrivacy]]. A cf_clearance cookie depends on enabling the pre-clearance feature.',
         },
       ],
     },
     {
-      heading: 'Your rights',
+      heading: 'Rights and contact',
       blocks: [
         {
           kind: 'p',
-          text: 'You can ask for access, rectification, erasure, restriction, portability and objection, and you can complain to the supervisory authority: in Italy the Garante per la protezione dei dati personali, elsewhere the authority in your country of residence. Write to [[contact]], ideally quoting the token of the link. Answers about secret content are necessarily limited, because it is encrypted with a key the server does not hold and has in most cases already been deleted.',
+          text: 'Where the GDPR provides for it, you can request access, rectification, erasure, restriction and portability, or object to processing. Write to [[contact]] without including the content, password or complete link. We cannot decrypt or recover secrets. You can complain to the Italian data protection authority or the competent authority in your country.',
         },
-      ],
-    },
-    {
-      heading: 'Changes',
-      blocks: [
         {
           kind: 'p',
-          text: 'The version in force is this page, with the date of the last revision above. The controller may update it and, if a change reduces your rights, announces it before it takes effect. The service is governed by the [[terms]] and is not intended for minors.',
+          text: 'This policy covers secrets. For the echoValue site: [[sitePrivacy]]. For this service: [[terms]]. The date above shows the last revision; changes affecting your rights will be communicated before taking effect.',
         },
       ],
     },
@@ -316,85 +290,65 @@ const privacyEn: LegalDocument = {
 };
 
 const termsIt: LegalDocument = {
-  title: 'Condizioni d\'uso',
-  summary:
-    'Le regole essenziali: uso lecito, responsabilità di chi condivide, una sola lettura senza ripristino, disponibilità senza garanzie e legge applicabile.',
+  title: "Condizioni d’uso",
+  summary: 'Un link, una sola lettura. Le regole e i limiti del servizio.',
   updated: '2026-10-05',
   sections: [
-    {
-      heading: 'Accettazione e titolare',
-      blocks: [
-        {
-          kind: 'p',
-          text: 'Queste condizioni regolano l\'uso del servizio pubblicato da Example Operator S.r.l., P.IVA IT00000000000, raggiungibile a [[contact]]. Usando il servizio le accetti, insieme alla [[privacy]]. Per il sito echoValue valgono le condizioni generali su [[siteTerms]].',
-        },
-      ],
-    },
     {
       heading: 'Il servizio',
       blocks: [
         {
           kind: 'p',
-          text: 'Il servizio trasforma un testo in un link monouso, con scadenza da un\'ora a trenta giorni e password opzionale. Il mittente riceve anche un link di controllo che indica lo stato del segreto e può annullarlo. Non è un archivio, un backup né un sistema di messaggistica. I contenuti che condividi restano tuoi: il titolare li conserva solo cifrati, per il tempo tecnico necessario alla consegna e alla cancellazione.',
+          text: 'secrets è gestito da Example Operator S.r.l., P.IVA IT00000000000: [[contact]]. Usandolo accetti queste condizioni. Puoi condividere testi fino a 50 KiB con un link monouso, una scadenza da un’ora a 30 giorni e una password opzionale. Il link di controllo mostra lo stato e permette di annullare il segreto. I contenuti restano tuoi. Il servizio non è destinato a minori.',
         },
       ],
     },
     {
-      heading: 'Uso consentito',
+      heading: 'Le tue responsabilità',
       blocks: [
         {
           kind: 'list',
           items: [
-            'condividi solo contenuti di cui sei proprietario o di cui hai il diritto di condividere, e per cui hai una base giuridica quando contengono dati personali;',
-            'non condividere contenuti illeciti o che ledono diritti altrui;',
-            'non tentare di leggere segreti altrui, di aggirare una password o di ricostruire un link non destinato a te;',
-            'non aggirare i limiti di frequenza né falsificare il tuo indirizzo IP;',
-            'non usare il servizio per scambi di cui dipenda la sicurezza di una persona o di un servizio essenziale.',
+            'Condividi solo contenuti leciti che hai diritto di condividere, rispettando la protezione dei dati personali.',
+            'Custodisci i link e invia l’eventuale password separatamente. Non tentare di accedere a segreti altrui o aggirare le protezioni e i limiti del servizio.',
+            'Non affidare al servizio scambi da cui dipendono la sicurezza di persone o servizi essenziali, né dati con obblighi di protezione incompatibili con questi limiti.',
           ],
         },
+      ],
+    },
+    {
+      heading: 'Una sola lettura, nessun recupero',
+      blocks: [
         {
           kind: 'p',
-          text: 'Il titolare può limitare o sospendere un link o un indirizzo IP quando serve ad adempiere ad obblighi di legge, a difendere il servizio da abusi o a far valere queste condizioni.',
+          text: 'Aprire il link non consuma il segreto. La richiesta di lettura lo cancella prima della consegna: se la risposta non arriva o la decifratura fallisce, non puoi riprovare e lo stato risulta “letto”. Il destinatario può conservare una copia del testo ricevuto. Se perdi il link o la password, non possiamo recuperarli. Scadenza e annullamento impediscono la lettura.',
         },
       ],
     },
     {
-      heading: 'Una sola lettura, nessun ripristino',
+      heading: 'Sicurezza e privacy',
       blocks: [
         {
           kind: 'p',
-          text: 'Un segreto viene cancellato prima che il contenuto ti venga consegnato. Se la cancellazione va a buon fine ma la risposta non arriva, se il collegamento si interrompe o se perdi il link, il contenuto è perso per sempre: non esistono copie, storici o recupero, e il link di controllo indicherà correttamente che è stato letto. Prima di affidare al servizio qualcosa che non puoi permetterti di perdere, valuta una copia sicura altrove.',
+          text: 'Il testo è cifrato nel browser e la chiave resta nel link. È cifratura lato client, non cifratura end-to-end verificata da una revisione indipendente: dispositivi compromessi o modifiche malevole alla pagina possono esporlo. La [[privacy]] descrive dati trattati, log di proxy e hosting e conservazione nei backup.',
         },
       ],
     },
     {
-      heading: 'Disponibilità',
+      heading: 'Disponibilità e responsabilità',
       blocks: [
         {
           kind: 'p',
-          text: 'Il servizio è fornito «così com\'è» e «come disponibile», senza garanzia di continuità e senza livello di servizio. Applica limiti di frequenza. Può essere modificato, sospeso o discontinuato con o senza preavviso, e può interrompersi per manutenzioni, guasti o problemi di rete. Non dipenderne per conservare dati, per trasmettere informazioni che non si possono perdere o per rispettare scadenze imperative.',
+          text: 'Il servizio è fornito così com’è, senza garanzie di continuità o recupero. Può essere modificato, interrotto o sospeso; applichiamo limiti alle richieste e possiamo bloccare gli abusi. Nei limiti di legge, Example Operator S.r.l. non risponde di danni indiretti, perdita di dati o mancato guadagno. Restano ferme le responsabilità non escludibili, incluse quelle per dolo o colpa grave, e i diritti dei consumatori.',
         },
       ],
     },
     {
-      heading: 'Sicurezza e responsabilità',
+      heading: 'Legge applicabile',
       blocks: [
         {
           kind: 'p',
-          text: 'Il contenuto è cifrato nel browser con AES-256-GCM e la chiave resta nel frammento del link: è un aiuto reale, ma non è una garanzia e non è una cifratura end-to-end verificata da una revisione indipendente. L\'applicazione non registra contenuti, password, token o corpi delle richieste, ma proxy e hosting possono registrare indirizzo IP, data e ora, percorso richiesto e user agent. Non usare il servizio per dati sottoposti a particolari obblighi di protezione.',
-        },
-        {
-          kind: 'p',
-          text: 'Nei limiti consentiti dalla legge il titolare non è responsabile di danni indiretti, di perdita di dati, di mancato guadagno o di indisponibilità del servizio, né della perdita definitiva di un segreto. Nulla limita le responsabilità che non possono essere limitate dalla legge, incluse quelle relative ai contratti di consumo, ai diritti dei consumatori e al dolo o alla colpa grave.',
-        },
-      ],
-    },
-    {
-      heading: 'Legge applicabile e contatti',
-      blocks: [
-        {
-          kind: 'p',
-          text: 'Queste condizioni sono regolate dalla legge italiana, ferme restando le tutele imperative previste dalla legge del Paese di residenza abituale del consumatore. Prima di rivolgerti a un organo giurisdizionale puoi scrivere a [[contact]]. Per qualsiasi domanda: Example Operator S.r.l., P.IVA IT00000000000. La versione in vigore è questa pagina, con la data di aggiornamento in alto.',
+          text: 'Si applica la legge italiana, senza pregiudicare le tutele inderogabili del Paese di residenza abituale del consumatore. Per domande o problemi: [[contact]]. La data in alto indica l’ultima revisione. Le condizioni generali del sito echoValue sono su [[siteTerms]].',
         },
       ],
     },
@@ -403,44 +357,28 @@ const termsIt: LegalDocument = {
 
 const termsEn: LegalDocument = {
   title: 'Terms of use',
-  summary:
-    'The essentials: lawful use, the sender\'s responsibilities, one read with no recovery, availability without warranties, and governing law.',
+  summary: 'One link, one read. The rules and limits of the service.',
   updated: '2026-10-05',
   sections: [
-    {
-      heading: 'Acceptance and operator',
-      blocks: [
-        {
-          kind: 'p',
-          text: 'These terms govern the use of the service published by Example Operator S.r.l., VAT IT00000000000, reachable at [[contact]]. By using the service you accept them together with the [[privacy]]. For the echoValue site the general terms on [[siteTerms]] apply.',
-        },
-      ],
-    },
     {
       heading: 'The service',
       blocks: [
         {
           kind: 'p',
-          text: 'The service turns a text into a one-time link, with an expiry from one hour to thirty days and an optional password. The sender also receives a control link that reports the state of the secret and can cancel it. It is not an archive, a backup or a messaging system. The content you share remains yours: the operator keeps it encrypted, only for as long as delivery and deletion require.',
+          text: 'secrets is operated by Example Operator S.r.l., VAT IT00000000000: [[contact]]. By using it you accept these terms. You can share text up to 50 KiB through a one-time link, with an expiry from one hour to 30 days and an optional password. The control link shows the status and lets you cancel the secret. Your content remains yours. The service is not intended for minors.',
         },
       ],
     },
     {
-      heading: 'Acceptable use',
+      heading: 'Your responsibilities',
       blocks: [
         {
           kind: 'list',
           items: [
-            'share only content you own or are entitled to share, and for which you have a legal basis when it contains personal data;',
-            'do not share unlawful content or content that infringes the rights of others;',
-            'do not attempt to read other people\'s secrets, bypass a password or reconstruct a link that was not meant for you;',
-            'do not circumvent the rate limits or spoof your IP address;',
-            'do not use the service for exchanges on which the safety of a person or of an essential service depends.',
+            'Share only lawful content you are entitled to share, respecting personal data protection requirements.',
+            'Keep the links safe and send any password separately. Do not attempt to access other people’s secrets or bypass the service’s protections and limits.',
+            'Do not rely on the service for exchanges affecting the safety of people or essential services, or for data with protection requirements incompatible with these limits.',
           ],
-        },
-        {
-          kind: 'p',
-          text: 'The operator may limit or suspend a link or an IP address whenever that is needed to meet a legal obligation, to defend the service from abuse, or to enforce these terms.',
         },
       ],
     },
@@ -449,38 +387,34 @@ const termsEn: LegalDocument = {
       blocks: [
         {
           kind: 'p',
-          text: 'A secret is deleted before its content is handed over to you. If the deletion succeeds but the response never arrives, if the connection breaks or if you lose the link, the content is gone for good: there are no copies, no history and no retrieval, and the control link will correctly report it as read. Before handing the service something you cannot afford to lose, keep a safe copy elsewhere.',
+          text: 'Opening the link does not consume the secret. A read request deletes it before delivery: if the response never arrives or decryption fails, you cannot retry and the status shows “read”. The recipient can keep a copy of the text received. If you lose the link or password, we cannot recover them. Expiry and cancellation prevent reading.',
         },
       ],
     },
     {
-      heading: 'Availability',
+      heading: 'Security and privacy',
       blocks: [
         {
           kind: 'p',
-          text: 'The service is provided "as is" and "as available", with no guarantee of continuity and no service level. Rate limits apply. It may be modified, suspended or discontinued with or without notice, and it may stop because of maintenance, failures or network problems. Do not rely on it to keep data, to convey information that cannot be lost or to meet a mandatory deadline.',
+          text: 'The browser encrypts the text and the key stays in the link. This is not end-to-end encryption verified by an independent review: compromised devices or malicious page changes can expose it. The [[privacy]] describes data processing, proxy and hosting logs, and backup retention.',
         },
       ],
     },
     {
-      heading: 'Security and liability',
+      heading: 'Availability and liability',
       blocks: [
         {
           kind: 'p',
-          text: 'Content is encrypted in the browser with AES-256-GCM and the key stays in the fragment of the link: a real help, but not a guarantee and not end-to-end encryption verified by an independent review. The application records no content, password, token or request body, but a proxy and the hosting stack may log IP addresses, dates and times, requested paths and user agents. Do not use the service for data subject to specific protection obligations.',
-        },
-        {
-          kind: 'p',
-          text: 'To the extent permitted by law the operator is not liable for indirect damage, for loss of data, for lost earnings or for the service being unavailable, nor for the definitive loss of a secret. Nothing limits any liability that cannot lawfully be limited, including liability under consumer contracts, statutory consumer rights, and wilful misconduct or gross negligence.',
+          text: 'The service is provided as is, with no guarantee of continuity or recovery. It may be changed, interrupted or suspended; request limits apply and we may block abuse. To the extent permitted by law, Example Operator S.r.l. is not liable for indirect damage, data loss or lost earnings. Liability that cannot legally be excluded, including for wilful misconduct or gross negligence, and consumer rights remain unaffected.',
         },
       ],
     },
     {
-      heading: 'Governing law and contact',
+      heading: 'Governing law',
       blocks: [
         {
           kind: 'p',
-          text: 'These terms are governed by Italian law, without prejudice to the mandatory protections of the law of the consumer\'s habitual residence. Before turning to a court you can write to [[contact]]. For any question: Example Operator S.r.l., VAT IT00000000000. The version in force is this page, with the date of the last revision above.',
+          text: 'Italian law applies, without prejudice to mandatory protections in the consumer’s country of habitual residence. For questions or problems: [[contact]]. The date above shows the last revision. The echoValue site’s general terms are at [[siteTerms]].',
         },
       ],
     },

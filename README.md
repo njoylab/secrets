@@ -248,7 +248,7 @@ diff in one place, and nothing legal is written inside an `.astro` file.
 
 Inline links are written `[[token]]` and resolved by `resolveLegalText`, which
 returns text and links as separate parts so the page renders prose as text. The
-five tokens and their labels are in `LEGAL_LINKS`; `tests/legal.test.ts` fails on
+allowed tokens and their labels are in `LEGAL_LINKS`; `tests/legal.test.ts` fails on
 an unknown or unused token. The operator identity — name, VAT number, contact
 address and the umbrella documents on the operator's main site — is the `OPERATOR`
 constant at the top of the same file.
@@ -257,6 +257,26 @@ The documents describe what the code does: hashed tokens, the browser-side
 ciphertext, the retention of `scripts/cleanup.mjs`, and the two residual limits
 below. Where the implementation cannot back a promise they say so, so a revision
 must keep matching the code rather than the intention.
+
+### Infrastructure retention policy
+
+The chosen target is a maximum of **7 days** for technical logs and any database
+backups controlled by Example Operator S.r.l.. This is a policy to configure and verify, not a
+retention guarantee enforced by the application. No infrastructure setting has
+been changed or verified in this repository.
+
+- Configure log rotation and deletion by age; redact share and control tokens
+  from request paths, and never log request bodies or link fragments.
+- If backups are enabled, expire backup copies, snapshots and archived WAL
+  within the same 7-day recovery window, including exported copies.
+- Record the effective settings and deletion checks before describing the limit
+  as active in the privacy policy. Retention of provider-controlled data must be
+  checked separately in the applicable contracts and policies.
+
+Turnstile is documented as a possible future addition and is not integrated.
+Before activation, verify the deployed cookie settings (including pre-clearance),
+provider transfer safeguards and retention, then update the notice to describe
+actual use. The support mailbox provider and message retention remain unverified.
 
 ## Local test database
 
