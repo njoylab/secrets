@@ -305,12 +305,8 @@ const presence = await peekSecretPresence(token);
           }
         }
 
-        const body: { token: string; password?: string; revealProof?: string } = { token };
+        const body: { token: string; revealProof?: string } = { token };
         if (revealProof) body.revealProof = revealProof;
-        // Legacy rows still gate reveal on the server. New rows never send it.
-        if (passwordMode === 'server' && password && password.value.length > 0) {
-          body.password = password.value;
-        }
 
         const response = await fetch('/api/secrets/reveal', {
           method: 'POST',

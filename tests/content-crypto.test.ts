@@ -14,7 +14,6 @@ import {
   CONTENT_TAG_BYTES,
   PASSWORD_KDF_ITERATIONS,
   PASSWORD_MAX_LENGTH,
-  PASSWORD_VERIFIER_TEXT,
   createPasswordVerifier,
   openPasswordVerifier,
   decodeBase64Url,
@@ -332,8 +331,8 @@ describe('password-derived content key', () => {
     expect(proof).not.toBe(encodeContentKey(derived));
     await expect(openPasswordVerifier(verifier, key)).rejects.toThrow();
     await expect(openPasswordVerifier(verifier, await derivePasswordKey(key, 'wrong horse', salt))).rejects.toThrow();
-    const legacy = await encryptPayload(PASSWORD_VERIFIER_TEXT, derived);
-    expect(await openPasswordVerifier(legacy, derived)).toBeUndefined();
+    const unsupported = await encryptPayload('echovalue-secrets-verifier-v1', derived);
+    await expect(openPasswordVerifier(unsupported, derived)).rejects.toThrow();
     for (const text of ['unexpected', 'echovalue-secrets-verifier-v2:short']) {
       await expect(openPasswordVerifier(await encryptPayload(text, derived), derived)).rejects.toThrow();
     }
@@ -355,10 +354,10 @@ describe('password-derived content key', () => {
     const salt = generatePasswordSalt();
     const derived = await derivePasswordKey(key, 'correct horse', salt);
     const payload = await encryptPayload('sealed', derived);
-    const verifier = await encryptPayload(PASSWORD_VERIFIER_TEXT, derived);
+    const { verifier } = await createPasswordVerifier(derived);
 
     expect(await decryptPayload(payload, derived)).toBe('sealed');
-    expect(await decryptPayload(verifier, derived)).toBe(PASSWORD_VERIFIER_TEXT);
+    expect(await openPasswordVerifier(verifier, derived)).toMatch(/^[A-Za-z0-9_-]{43}$/);
     await expect(decryptPayload(payload, key)).rejects.toThrow();
 
     const other = await derivePasswordKey(key, 'wrong horse', salt);

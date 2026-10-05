@@ -5,10 +5,11 @@
  * execution order; nothing here returns secret content, passwords or tokens.
  */
 import { Buffer } from 'node:buffer';
-import { hashPassword, hashToken } from '../src/lib/crypto.ts';
+import { hashToken } from '../src/lib/crypto.ts';
 import { query } from '../src/lib/db.ts';
 import {
-  PASSWORD_VERIFIER_TEXT,
+  createPasswordVerifier,
+  openPasswordVerifier,
   encodeContentKey,
   encodeShareFragment,
   encryptPayload,
@@ -196,9 +197,12 @@ export async function sealedSecret(secret: string): Promise<{
   return { payload: await encryptPayload(secret, key), key, keyText: encodeContentKey(key) };
 }
 
+export const DUMMY_REVEAL_PROOF = 'A'.repeat(43);
+export const DUMMY_REVEAL_PROOF_HASH = hashToken(DUMMY_REVEAL_PROOF);
+
 /** A well formed verifier envelope. It does not bind a particular password. */
 export async function dummyVerifier(): Promise<string> {
-  return encryptPayload(PASSWORD_VERIFIER_TEXT, generateContentKey());
+  return encryptPayload('echovalue-secrets-verifier-v2:' + DUMMY_REVEAL_PROOF, generateContentKey());
 }
 
 /**
@@ -214,25 +218,21 @@ export async function sealedPasswordSecret(
   key: ContentBytes;
   salt: ContentBytes;
   fragment: string;
+  revealProof: string;
+  revealProofHash: string;
 }> {
   const key = generateContentKey();
   const salt = generatePasswordSalt();
   const derived = await derivePasswordKey(key, password, salt);
+  const check = await createPasswordVerifier(derived);
   return {
     payload: await encryptPayload(secret, derived),
-    verifier: await encryptPayload(PASSWORD_VERIFIER_TEXT, derived),
+    ...check,
+    revealProof: await openPasswordVerifier(check.verifier, derived),
     key,
     salt,
     fragment: encodeShareFragment(key, salt),
   };
-}
-
-/** Attach a legacy scrypt hash to a row created without a client verifier. */
-export async function lockWithLegacyPassword(token: string, password: string): Promise<void> {
-  await query(`UPDATE secrets SET password_hash = $2 WHERE token_hash = $1`, [
-    hashToken(token),
-    await hashPassword(password),
-  ]);
 }
 
 /** The share link a recipient receives, key included: it never leaves the browser. */

@@ -84,7 +84,7 @@ npm start
    password, the browser first asks for the verifier and checks it locally; a
    wrong password does not reveal. Decrypting the verifier releases the random
    proof, which the server requires in the `revealProof` field before consuming
-   a new password-protected link. A deliberate POST to `/api/secrets/reveal`
+   a password-protected link. A deliberate POST to `/api/secrets/reveal`
    performs the single `DELETE ... RETURNING` and returns the sealed payload.
    The browser opens it with the fragment key, or with the password-derived key.
 
@@ -223,15 +223,14 @@ timer, for example every hour:
   PBKDF2-HMAC-SHA256 (600,000 iterations) and HKDF over the fragment key, and
   seals an independent 256-bit reveal proof inside the verifier. Only the proof's
   SHA-256 hash is stored for server authorization; the password, fragment key and
-  derived key remain in the browser. New password links require a valid proof
+  derived key remain in the browser. Password links require a valid proof
   before deletion, so token-only API requests cannot consume them.
-  Migration `0004_reveal_proof.sql` is additive. Existing v1 links retain their
-  original contract until expiration (at most 30 days): a caller bypassing the
-  browser check can consume their unreadable ciphertext. Existing pages must be
-  refreshed before creating password links with the new protocol. Do not roll
-  back to code that ignores reveal proofs: it would reopen the consumption bypass
-  for new links. Older rows keep a scrypt hash (N=32768, r=8, p=1) and
-  still reject a wrong password on the server, outside any database lock.
+  A verifier and its proof hash must always be supplied together. Only this
+  password protocol is supported; incomplete or unsupported stored records are
+  unavailable and cannot be consumed. Historical migrations remain versioned;
+  the unused `password_hash` column is never populated or verified by the app.
+  No existing data is deleted by this code change. Do not roll back to code that
+  ignores reveal proofs: it would reopen the consumption bypass.
 - Consumption is a single conditional `DELETE ... RETURNING` inside the same
   transaction that writes the `read` receipt, so at most one concurrent request
   can ever obtain the content and the state reported afterwards always matches it.
@@ -313,8 +312,9 @@ setup. Use the isolated database for every invocation of this Vitest config.
 
 ## Release checks and the platform operations
 
-the platform manages the deployment on the hosting provider. CI verifies typecheck,
-PostgreSQL tests, build, browser flows and the production dependency audit.
+the platform manages the deployment on the hosting provider. The public instance
+is a pre-launch environment. CI verifies typecheck, PostgreSQL tests, build,
+browser flows and the production dependency audit.
 The first GitHub attempt could not acquire a hosted runner; local checks are not
 proof of a CI-gated release. The current Git webhook can deploy a push before CI finishes. Deploy
 only a verified revision, or configure a CI gate before relying on automatic releases.
@@ -392,16 +392,16 @@ or CSP. The approved release now passes public readiness and header checks,
 including the application CSP. A Cloudflare response-header rule scoped to
 `secrets.example.com` sets `no-referrer`, `DENY` and HSTS (`max-age=15552000`).
 
-Local proof: 428 PostgreSQL/unit tests and 40 browser cases passed, with clean
+Local proof: 393 PostgreSQL/unit tests and 40 browser cases passed, with clean
 build/typecheck and no known npm vulnerabilities. An isolated restore drill
 reproduced resurrection and verified offline payload removal prevents it. Outage
 checks returned safe 503 responses and recovered without losing a pending fixture;
 chunked body limits, malformed-host rejection and token-free metrics/errors
 passed. A 100-request local readiness burst had p95 about 40 ms, not a production
 capacity estimate. Actual the platform restore, notification delivery, log retention
-and edge rate limits remain unverified. The v2 password protocol rejects direct
-API consumption without the proof released by the password verifier. Existing
-v1 links retain the consumption limitation described above until expiration.
+and edge rate limits remain unverified. The password protocol rejects direct
+API consumption without the proof released by the password verifier. Unsupported
+password formats are rejected without consumption.
 
 References: [the platform backups](https://example.com/docs/databases/backups),
 [proxy middleware](https://example.com/docs/core/networking/proxy/traefik/custom-middlewares),

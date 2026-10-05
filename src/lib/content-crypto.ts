@@ -35,14 +35,10 @@ export const SHARE_TOKEN_LENGTH = 43;
 export const PASSWORD_SALT_BYTES = 16;
 export const PASSWORD_SALT_LENGTH = 22;
 
-/** Client-side password KDF. Web Crypto has PBKDF2, not scrypt. */
+/** Client-side password KDF through Web Crypto. */
 export const PASSWORD_KDF_ITERATIONS = 600_000;
 export const PASSWORD_MAX_LENGTH = 512;
 
-/**
- * Legacy verifier plaintext, retained so existing v1 links remain readable.
- */
-export const PASSWORD_VERIFIER_TEXT = 'echovalue-secrets-verifier-v1';
 const PASSWORD_PROOF_PREFIX = 'echovalue-secrets-verifier-v2:';
 
 /** The proof is independent of the content key; its hash cannot authorize reveal. */
@@ -58,10 +54,9 @@ export async function createPasswordVerifier(key: ContentBytes): Promise<{
   };
 }
 
-/** Only a decrypted v2 verifier releases a proof. v1 links remain readable. */
-export async function openPasswordVerifier(verifier: string, key: ContentBytes): Promise<string | undefined> {
+/** A valid decrypted verifier releases the authorization proof. */
+export async function openPasswordVerifier(verifier: string, key: ContentBytes): Promise<string> {
   const opened = await decryptPayload(verifier, key);
-  if (opened === PASSWORD_VERIFIER_TEXT) return undefined;
   if (opened.startsWith(PASSWORD_PROOF_PREFIX)) {
     const proof = opened.slice(PASSWORD_PROOF_PREFIX.length);
     if (decodeBase64Url(proof)?.byteLength === 32) return proof;

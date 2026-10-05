@@ -12,7 +12,6 @@ import {
   EXPIRY_PRESET_SECONDS,
   MAX_CANCEL_BODY_BYTES,
   MAX_CREATE_BODY_BYTES,
-  MAX_PASSWORD_LENGTH,
   MAX_PAYLOAD_BYTES,
   MAX_REVEAL_BODY_BYTES,
   MAX_SECRET_BYTES,
@@ -25,6 +24,8 @@ import {
 import {
   captureSecretError,
   dummyVerifier,
+  DUMMY_REVEAL_PROOF,
+  DUMMY_REVEAL_PROOF_HASH,
   fetchSecretRow,
   payloadOfBytes,
   resetEnv,
@@ -156,9 +157,9 @@ describe('request body size', () => {
   });
 
   it('keeps a small ceiling on the reveal body', () => {
-    // A reveal carries a 43 character token and a password, never the payload.
+    // A reveal carries a token and an authorization proof, never the payload.
     expect(MAX_REVEAL_BODY_BYTES).toBeLessThan(MAX_CREATE_BODY_BYTES);
-    expect(MAX_REVEAL_BODY_BYTES).toBe((43 + MAX_PASSWORD_LENGTH) * 6 + 256);
+    expect(MAX_REVEAL_BODY_BYTES).toBe(2 * 43 * 6 + 256);
     expect(MAX_REVEAL_BODY_BYTES).toBeLessThan(8 * 1024);
   });
 
@@ -235,6 +236,12 @@ describe('expiry presets', () => {
 });
 
 describe('verifier', () => {
+  it('requires a proof hash whenever a verifier is supplied, including internal creation', async () => {
+    const { payload } = await sealedSecret('mandatory authorization');
+    const error = await captureSecretError(createSecret({ payload, expiresIn: '7d', verifier: await dummyVerifier() }));
+    expect(error.code).toBe('invalidVerifier');
+  });
+
   it('rejects a verifier that is not a sealed envelope', async () => {
     const { payload } = await sealedSecret('verifier');
     const error = await captureSecretError(
@@ -255,10 +262,10 @@ describe('verifier', () => {
   it('stores a verifier and still reveals the original payload', async () => {
     const { payload } = await sealedSecret('with verifier');
     const verifier = await dummyVerifier();
-    const created = await createSecret({ payload, expiresIn: '7d', verifier });
+    const created = await createSecret({ payload, expiresIn: '7d', verifier, revealProofHash: DUMMY_REVEAL_PROOF_HASH });
     const row = await fetchSecretRow(created.token);
     expect(row?.password_hash).toBeNull();
     expect(row?.password_verifier).toBeTruthy();
-    expect(await revealSecret(created.token)).toEqual({ ok: true, payload });
+    expect(await revealSecret(created.token, DUMMY_REVEAL_PROOF)).toEqual({ ok: true, payload });
   });
 });

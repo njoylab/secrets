@@ -3,7 +3,7 @@
  *
  * Everything here inspects the `secrets` table directly: the point is to prove
  * that what the application persists is only what it is allowed to persist, and
- * that malformed tokens and corrupted password hashes can never turn into a
+ * that malformed tokens can never turn into a
  * readable secret. No assertion message contains secret content.
  */
 import { Buffer } from 'node:buffer';
@@ -11,10 +11,8 @@ import { createHash } from 'node:crypto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   decryptSecret,
-  hashPassword,
   hashToken,
   isValidTokenShape,
-  verifyPassword,
 } from '../src/lib/crypto.ts';
 import { query } from '../src/lib/db.ts';
 import { getConfig } from '../src/lib/env.ts';
@@ -25,6 +23,8 @@ import {
   fetchReceipt,
   fetchReceiptJson,
   dummyVerifier,
+  DUMMY_REVEAL_PROOF,
+  DUMMY_REVEAL_PROOF_HASH,
   fetchSecretRow,
   forceExpire,
   resetEnv,
@@ -150,6 +150,7 @@ describe('control token persistence', () => {
       payload: await probe(),
       expiresIn: '7d',
       verifier: await dummyVerifier(),
+      revealProofHash: DUMMY_REVEAL_PROOF_HASH,
     });
     const json = await secretRowJson(created.token);
     const row = await fetchSecretRow(created.token);
@@ -172,7 +173,7 @@ describe('control token persistence', () => {
 describe('receipt persistence', () => {
   it('stores only a state, a hash and two timestamps, never content', async () => {
     const payload = await probe();
-    const created = await createSecret({ payload, expiresIn: '1d', verifier: await dummyVerifier() });
+    const created = await createSecret({ payload, expiresIn: '1d', verifier: await dummyVerifier(), revealProofHash: DUMMY_REVEAL_PROOF_HASH });
     await forceExpire(created.token);
     await purgeExpired(HOUR_SECONDS);
 
@@ -215,7 +216,7 @@ describe('token persistence', () => {
   });
 
   it('never stores the token itself, anywhere in the row', async () => {
-    const created = await createSecret({ payload: await probe(), expiresIn: '7d', verifier: await dummyVerifier() });
+    const created = await createSecret({ payload: await probe(), expiresIn: '7d', verifier: await dummyVerifier(), revealProofHash: DUMMY_REVEAL_PROOF_HASH });
     const row = await fetchSecretRow(created.token);
     if (!row) throw new Error('secret row missing');
     const json = await secretRowJson(created.token);
@@ -231,7 +232,7 @@ describe('token persistence', () => {
 describe('password persistence', () => {
   it('stores an opaque verifier and never the password', async () => {
     const verifier = await dummyVerifier();
-    const created = await createSecret({ payload: await probe(), expiresIn: '7d', verifier });
+    const created = await createSecret({ payload: await probe(), expiresIn: '7d', verifier, revealProofHash: DUMMY_REVEAL_PROOF_HASH });
     const row = await fetchSecretRow(created.token);
     if (!row?.password_verifier) throw new Error('password_verifier is null');
 
@@ -246,11 +247,13 @@ describe('password persistence', () => {
       payload: await probe(),
       expiresIn: '7d',
       verifier: await dummyVerifier(),
+      revealProofHash: DUMMY_REVEAL_PROOF_HASH,
     });
     const second = await createSecret({
       payload: await probe(),
       expiresIn: '7d',
       verifier: await dummyVerifier(),
+      revealProofHash: DUMMY_REVEAL_PROOF_HASH,
     });
 
     const firstRow = await fetchSecretRow(first.token);
@@ -306,7 +309,7 @@ describe('expiry storage', () => {
   });
 
   it('keeps the row unreadable once the stored expiry is in the past', async () => {
-    const created = await createSecret({ payload: await probe(), expiresIn: '1d', verifier: await dummyVerifier() });
+    const created = await createSecret({ payload: await probe(), expiresIn: '1d', verifier: await dummyVerifier(), revealProofHash: DUMMY_REVEAL_PROOF_HASH });
     await query(`UPDATE secrets SET expires_at = now() - interval '1 second' WHERE token_hash = $1`, [
       hashToken(created.token),
     ]);
@@ -366,7 +369,7 @@ describe('revealSecret with a malformed token', () => {
   ];
 
   it.each(malformed)('returns unavailable for a %s token and changes nothing', async (_label, token) => {
-    const live = await createSecret({ payload: await probe(), expiresIn: '7d', verifier: await dummyVerifier() });
+    const live = await createSecret({ payload: await probe(), expiresIn: '7d', verifier: await dummyVerifier(), revealProofHash: DUMMY_REVEAL_PROOF_HASH });
     const before = await secretRowJson(live.token);
 
     expect(await revealSecret(token)).toEqual({ ok: false, reason: 'unavailable' });
@@ -374,11 +377,11 @@ describe('revealSecret with a malformed token', () => {
     // The malformed attempt must not consume, delete or alter anything.
     expect(await countSecrets()).toBe(1);
     expect(await secretRowJson(live.token)).toBe(before);
-    expect(await revealSecret(live.token, PROBE_PASSWORD)).toEqual({ ok: true, payload: await probe() });
+    expect(await revealSecret(live.token, DUMMY_REVEAL_PROOF)).toEqual({ ok: true, payload: await probe() });
   });
 
   it('treats a protected secret as unavailable, not as bad_password, for a malformed token', async () => {
-    const live = await createSecret({ payload: await probe(), expiresIn: '7d', verifier: await dummyVerifier() });
+    const live = await createSecret({ payload: await probe(), expiresIn: '7d', verifier: await dummyVerifier(), revealProofHash: DUMMY_REVEAL_PROOF_HASH });
     // An unknown token must not be distinguishable from a wrong password: the
     // answer reveals nothing about whether a protected secret exists.
     expect(await revealSecret('x'.repeat(43), 'wrong-password')).toEqual({
@@ -390,77 +393,6 @@ describe('revealSecret with a malformed token', () => {
       reason: 'unavailable',
     });
     expect(await countSecrets()).toBe(1);
-    expect(await revealSecret(live.token, PROBE_PASSWORD)).toEqual({ ok: true, payload: await probe() });
-  });
-});
-
-describe('verifyPassword against corrupted stored values', () => {
-  // A value that is not a well formed scrypt hash must fail closed: the callers
-  // turn a false into "wrong password" and into a 403, so a throw or, worse, a
-  // true would be a security defect.
-  const malformed: ReadonlyArray<readonly [string, string]> = [
-    ['empty string', ''],
-    ['scheme only', 'scrypt'],
-    ['scheme and separator only', 'scrypt$'],
-    ['one dollar short', 'scrypt$1024$8$1$c2FsdA'],
-    ['one field too many', 'scrypt$1024$8$1$c2FsdA$aGFzaA$extra'],
-    ['non numeric parameters', 'scrypt$a$b$c$d$e'],
-    ['a different algorithm', 'bcrypt$1$2$3$4$5'],
-    ['a different algorithm with a real body', 'pbkdf2$32768$8$1$c2FsdA$aGFzaA'],
-    ['an empty salt', 'scrypt$1024$8$1$$aGFzaA'],
-    ['an empty hash body', 'scrypt$1024$8$1$c2FsdA$'],
-    ['an invalid base64 hash body', 'scrypt$1024$8$1$c2FsdA$!!!not-base64!!!'],
-    // Known defect in src/lib/crypto.ts: a body that decodes to zero bytes asks
-    // scrypt for a zero length key, and timingSafeEqual reports two empty
-    // buffers as equal, so any password is accepted.
-    ['a hash body that decodes to nothing', 'scrypt$1024$8$1$c2FsdA$%'],
-    ['a salt and hash body that decode to nothing', 'scrypt$1024$8$1$%$%'],
-    ['a zero cost factor', 'scrypt$0$8$1$c2FsdA$aGFzaA'],
-    ['a cost factor of one', 'scrypt$1$8$1$c2FsdA$aGFzaA'],
-    ['a negative cost factor', 'scrypt$-1024$8$1$c2FsdA$aGFzaA'],
-    ['a cost factor beyond memory', 'scrypt$1073741824$8$1$c2FsdA$aGFzaA'],
-    ['a huge cost factor as text', 'scrypt$99999999999999999999$8$1$c2FsdA$aGFzaA'],
-    ['a fractional cost factor', 'scrypt$1024.5$8$1$c2FsdA$aGFzaA'],
-    ['whitespace parameters', 'scrypt$ $ $ $ $ '],
-    ['a truncated scrypt value', 'scrypt$32768$8$1'],
-  ];
-
-  it.each(malformed)('returns false instead of throwing for a %s', async (_label, stored) => {
-    await expect(verifyPassword(PROBE_PASSWORD, stored)).resolves.toBe(false);
-    await expect(verifyPassword('', stored)).resolves.toBe(false);
-  });
-
-  it('returns false when the stored hash body does not match the password length', async () => {
-    // Truncate a real hash body: the derived key is recomputed at the shortened
-    // length, so the comparison must fail rather than throw or succeed.
-    const reference = await hashPassword(PROBE_PASSWORD);
-    const parts = reference.split('$');
-    const truncated = [...parts.slice(0, 5), Buffer.alloc(32, 0x62).toString('base64url')].join('$');
-    expect(truncated).not.toBe(reference);
-
-    await expect(verifyPassword(PROBE_PASSWORD, truncated)).resolves.toBe(false);
-    await expect(verifyPassword(PROBE_PASSWORD, reference)).resolves.toBe(true);
-  });
-
-  it('rejects a real hash whose salt was replaced, without throwing', async () => {
-    const reference = await hashPassword(PROBE_PASSWORD);
-    const parts = reference.split('$');
-    const tampered = ['scrypt', parts[1] ?? '', parts[2] ?? '', parts[3] ?? '', 'b3RoZXItc2FsdA', parts[5] ?? ''].join(
-      '$',
-    );
-
-    await expect(verifyPassword(PROBE_PASSWORD, tampered)).resolves.toBe(false);
-    await expect(verifyPassword(PROBE_PASSWORD, reference)).resolves.toBe(true);
-  });
-
-  it('normalizes NFKC exactly like the hashing side', async () => {
-    const stored = await hashPassword('mot de passe e\u0301');
-
-    await expect(verifyPassword('mot de passe \u00E9', stored)).resolves.toBe(true);
-    await expect(verifyPassword('mot de passe e\u0301', stored)).resolves.toBe(true);
-    // NFKC compatibility forms: U+FB01 LATIN SMALL LIGATURE FI folds to "fi".
-    const ligature = await hashPassword('\uFB01le');
-    await expect(verifyPassword('file', ligature)).resolves.toBe(true);
-    await expect(verifyPassword('\uFB01le', ligature)).resolves.toBe(true);
+    expect(await revealSecret(live.token, DUMMY_REVEAL_PROOF)).toEqual({ ok: true, payload: await probe() });
   });
 });

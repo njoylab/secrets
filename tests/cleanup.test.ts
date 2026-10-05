@@ -19,6 +19,8 @@ import {
   countSecrets,
   deleteReceipt,
   dummyVerifier,
+  DUMMY_REVEAL_PROOF,
+  DUMMY_REVEAL_PROOF_HASH,
   fetchRateLimitRows,
   fetchReceipt,
   fetchReceiptJson,
@@ -54,6 +56,7 @@ describe('purgeExpired: secrets', () => {
       payload: (await sealedSecret('live locked')).payload,
       expiresIn: '7d',
       verifier: await dummyVerifier(),
+      revealProofHash: DUMMY_REVEAL_PROOF_HASH,
     });
     await forceExpire(expiredShort.token);
     await setExpiresInSeconds(expiredLong.token, -1);
@@ -70,12 +73,12 @@ describe('purgeExpired: secrets', () => {
 
   it('leaves a live row byte for byte identical', async () => {
     const { payload } = await sealedSecret('untouched');
-    const live = await createSecret({ payload, expiresIn: '7d', verifier: await dummyVerifier() });
+    const live = await createSecret({ payload, expiresIn: '7d', verifier: await dummyVerifier(), revealProofHash: DUMMY_REVEAL_PROOF_HASH });
     const before = await secretRowJson(live.token);
 
     expect(await purgeExpired(HOUR)).toEqual({ secrets: 0, receipts: 0, counters: 0 });
     expect(await secretRowJson(live.token)).toBe(before);
-    expect(await revealSecret(live.token, 'pw-probe')).toEqual({ ok: true, payload });
+    expect(await revealSecret(live.token, DUMMY_REVEAL_PROOF)).toEqual({ ok: true, payload });
   });
 
   it('treats an expiry exactly at now as expired, in SQL', async () => {
@@ -194,7 +197,7 @@ describe('purgeExpired: receipts', () => {
 
   it('never puts a payload, a password or a token in a receipt', async () => {
     const { payload } = await sealedSecret('receipt hygiene');
-    const created = await createSecret({ payload, expiresIn: '1d', verifier: await dummyVerifier() });
+    const created = await createSecret({ payload, expiresIn: '1d', verifier: await dummyVerifier(), revealProofHash: DUMMY_REVEAL_PROOF_HASH });
     await forceExpire(created.token);
     await purgeExpired(HOUR);
 

@@ -23,7 +23,6 @@ import {
   generateToken,
   hashToken,
   isValidTokenShape,
-  verifyPassword,
 } from './crypto.ts';
 import {
   CONTENT_NONCE_BYTES,
@@ -102,12 +101,12 @@ const JSON_ENVELOPE_BYTES = 256;
 export const MAX_CREATE_BODY_BYTES = MAX_PAYLOAD_BYTES + MAX_VERIFIER_BYTES + JSON_ENVELOPE_BYTES;
 
 /**
- * Body ceiling for `POST /api/secrets/reveal`: a token and a password, never the
+ * Body ceiling for `POST /api/secrets/reveal`: a token and a reveal proof, never the
  * payload. Kept small on purpose so a reveal request cannot be used to push
  * megabytes of arbitrary content into the process.
  */
 export const MAX_REVEAL_BODY_BYTES =
-  (TOKEN_LENGTH + MAX_PASSWORD_LENGTH) * JSON_ESCAPE_FACTOR + JSON_ENVELOPE_BYTES;
+  2 * TOKEN_LENGTH * JSON_ESCAPE_FACTOR + JSON_ENVELOPE_BYTES;
 
 /** Body ceiling for `POST /api/secrets/cancel`: one control token and nothing else. */
 export const MAX_CANCEL_BODY_BYTES = TOKEN_LENGTH * JSON_ESCAPE_FACTOR + JSON_ENVELOPE_BYTES;
@@ -151,7 +150,7 @@ export interface CreatedSecret {
   readonly expiresAt: Date;
 }
 
-export type PasswordMode = 'none' | 'client' | 'server';
+export type PasswordMode = 'none' | 'client';
 
 export type RevealFailure = 'unavailable' | 'bad_password' | 'undecryptable';
 
@@ -251,8 +250,8 @@ export async function createSecret(input: CreateSecretInput): Promise<CreatedSec
   const expiresIn = validateExpiryPreset(input.expiresIn);
   const verifier = validateVerifier(input.verifier);
   const proofHash = input.revealProofHash;
-  if (proofHash !== undefined &&
-      (verifier === undefined || typeof proofHash !== 'string' || !/^[0-9a-f]{64}$/.test(proofHash))) {
+  if ((verifier !== undefined && (typeof proofHash !== 'string' || !/^[0-9a-f]{64}$/.test(proofHash))) ||
+      (verifier === undefined && proofHash !== undefined)) {
     throw new SecretValidationError('invalidVerifier', 'Invalid reveal proof hash');
   }
 
@@ -285,10 +284,12 @@ export async function peekSecretPresence(token: string): Promise<{ password: Pas
   const { rows } = await query<{
     password_hash: string | null;
     password_verifier: string | null;
+    reveal_proof_hash: string | null;
     is_expired: boolean;
   }>(
     `SELECT password_hash,
             password_verifier,
+            reveal_proof_hash,
             expires_at <= now() AS is_expired
        FROM secrets
       WHERE token_hash = $1`,
@@ -296,11 +297,9 @@ export async function peekSecretPresence(token: string): Promise<{ password: Pas
   );
   const row = rows[0];
   if (!row || row.is_expired) return null;
-  // A verifier means the password was mixed into the content key in the browser.
-  // A hash without a verifier is a row created before that change: the server
-  // still checks scrypt, and the content key is the fragment alone.
+  if (row.password_hash !== null ||
+      (row.password_verifier === null) !== (row.reveal_proof_hash === null)) return null;
   if (row.password_verifier !== null) return { password: 'client' };
-  if (row.password_hash !== null) return { password: 'server' };
   return { password: 'none' };
 }
 
@@ -321,6 +320,8 @@ export async function readPasswordVerifier(token: string): Promise<VerifierRead>
     `SELECT password_verifier
        FROM secrets
       WHERE token_hash = $1
+        AND password_hash IS NULL
+        AND reveal_proof_hash IS NOT NULL
         AND expires_at > now()`,
     [hashToken(token)],
   );
@@ -432,7 +433,7 @@ export async function cancelSecret(controlToken: string): Promise<CancelResult> 
  * A failing password never reaches the decrypt or the delete, so it cannot
  * consume the secret.
  */
-export async function revealSecret(token: string, password?: string, revealProof?: string): Promise<RevealResult> {
+export async function revealSecret(token: string, revealProof?: string): Promise<RevealResult> {
   if (!isValidTokenShape(token)) return { ok: false, reason: 'unavailable' };
 
   const tokenHash = hashToken(token);
@@ -446,19 +447,16 @@ export async function revealSecret(token: string, password?: string, revealProof
   );
   const candidate = candidates[0];
   if (!candidate) return { ok: false, reason: 'unavailable' };
+  if (candidate.password_hash !== null ||
+      (candidate.password_verifier === null) !== (candidate.reveal_proof_hash === null)) {
+    return { ok: false, reason: 'unavailable' };
+  }
 
   // A v2 verifier seals a random proof under the password-derived key. Only
   // its hash is stored here; possession of the share token alone is insufficient.
   if (candidate.reveal_proof_hash !== null) {
     if (typeof revealProof !== 'string' || !isValidTokenShape(revealProof) ||
         !timingSafeEqual(Buffer.from(hashToken(revealProof), 'hex'), Buffer.from(candidate.reveal_proof_hash, 'hex'))) {
-      return { ok: false, reason: 'bad_password' };
-    }
-  }
-  // Pre-v2 client verifiers and legacy scrypt rows keep their original contract.
-  if (candidate.password_verifier === null && candidate.password_hash !== null) {
-    const supplied = password ?? '';
-    if (!(await verifyPassword(supplied, candidate.password_hash))) {
       return { ok: false, reason: 'bad_password' };
     }
   }

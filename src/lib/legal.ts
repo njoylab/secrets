@@ -148,7 +148,7 @@ const privacyIt: LegalDocument = {
       blocks: [
         {
           kind: 'p',
-          text: 'Il browser cifra il testo prima di inviarlo. La chiave resta nel link, dopo #, e non arriva al server. La password dei nuovi segreti resta nel browser; per quelli precedenti il server verifica un hash. Chi ha il link completo può aprire il segreto, con la password se impostata.',
+          text: 'Il browser cifra il testo prima di inviarlo. La chiave resta nel link, dopo #, e non arriva al server. La password resta nel browser. Il server autorizza la lettura solo dopo la verifica della password, se impostata. Chi ha il link completo può aprire il segreto, con la password se impostata.',
         },
         {
           kind: 'p',
@@ -235,7 +235,7 @@ const privacyEn: LegalDocument = {
       blocks: [
         {
           kind: 'p',
-          text: 'The browser encrypts the text before sending it. The key stays in the link, after #, and never reaches the server. Passwords for new secrets stay in the browser; for older secrets the server checks a hash. Anyone with the complete link can open the secret, with the password if set.',
+          text: 'The browser encrypts the text before sending it. The key stays in the link, after #, and never reaches the server. The password stays in the browser. The server authorizes reading only after password verification, if a password is set. Anyone with the complete link can open the secret, with the password if set.',
         },
         {
           kind: 'p',

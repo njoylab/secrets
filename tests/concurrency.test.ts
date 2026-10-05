@@ -14,8 +14,9 @@ import {
   countReceipts,
   countSecrets,
   dummyVerifier,
+  DUMMY_REVEAL_PROOF,
+  DUMMY_REVEAL_PROOF_HASH,
   fetchReceipt,
-  lockWithLegacyPassword,
   resetEnv,
   sealedSecret,
 } from './helpers.ts';
@@ -64,31 +65,17 @@ describe('parallel revealSecret', () => {
     const created = await createSecret({
       payload: (await sealedSecret('protected single use')).payload,
       verifier: await dummyVerifier(),
+      revealProofHash: DUMMY_REVEAL_PROOF_HASH,
       expiresIn: '7d',
     });
 
-    const results = await Promise.all(Array.from({ length: 3 }, () => revealSecret(created.token)));
+    const results = await Promise.all(Array.from({ length: 3 }, () => revealSecret(created.token, DUMMY_REVEAL_PROOF)));
 
     expect(countWinners(results)).toBe(1);
     for (const loser of results.filter((result) => !result.ok)) {
       expect(loser).toEqual({ ok: false, reason: 'unavailable' });
     }
     expect(await countSecrets()).toBe(0);
-  });
-
-  it('does not consume the secret when every concurrent attempt uses a wrong legacy password', async () => {
-    const { payload } = await sealedSecret('guarded payload');
-    const created = await createSecret({ payload, expiresIn: '7d' });
-    await lockWithLegacyPassword(created.token, 'p4ssw0rd');
-
-    const results = await Promise.all(
-      Array.from({ length: 3 }, (_unused, index) => revealSecret(created.token, `wrong-${index}`)),
-    );
-
-    expect(countWinners(results)).toBe(0);
-    for (const result of results) expect(result).toEqual({ ok: false, reason: 'bad_password' });
-    expect(await countSecrets()).toBe(1);
-    expect(await revealSecret(created.token, 'p4ssw0rd')).toEqual({ ok: true, payload });
   });
 
   it('does not let a winning reveal of a different secret be affected by a loser', async () => {

@@ -5,14 +5,11 @@ import { Buffer } from 'node:buffer';
 import { createHash, randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
-  SCRYPT_PARAMS,
   decryptSecret,
   encryptSecret,
   generateToken,
-  hashPassword,
   hashToken,
   isValidTokenShape,
-  verifyPassword,
 } from '../src/lib/crypto.ts';
 
 const KEY = randomBytes(32);
@@ -141,57 +138,5 @@ describe('encryptSecret / decryptSecret', () => {
     expect(() => decryptSecret(Buffer.from('short').toString('base64url'), KEY)).toThrow(
       'Ciphertext payload is too short',
     );
-  });
-});
-
-describe('hashPassword', () => {
-  it('stores scrypt parameters, a 16 byte salt and a 64 byte derived key', async () => {
-    const stored = await hashPassword('correct horse battery staple');
-    const parts = stored.split('$');
-    expect(parts).toHaveLength(6);
-    expect(parts[0]).toBe('scrypt');
-    expect(Number(parts[1])).toBe(SCRYPT_PARAMS.N);
-    expect(Number(parts[2])).toBe(SCRYPT_PARAMS.r);
-    expect(Number(parts[3])).toBe(SCRYPT_PARAMS.p);
-    expect(Buffer.from(parts[4] ?? '', 'base64url')).toHaveLength(16);
-    expect(Buffer.from(parts[5] ?? '', 'base64url')).toHaveLength(SCRYPT_PARAMS.keyLength);
-    expect(stored).not.toContain('correct horse');
-  });
-
-  it('salts each hash, so the same password never produces the same string', async () => {
-    const [first, second] = await Promise.all([hashPassword('same password'), hashPassword('same password')]);
-    expect(first).not.toBe(second);
-    expect(await verifyPassword('same password', first)).toBe(true);
-    expect(await verifyPassword('same password', second)).toBe(true);
-  });
-});
-
-describe('verifyPassword', () => {
-  it('accepts the correct password and rejects a wrong one', async () => {
-    const stored = await hashPassword('the-right-password');
-    expect(await verifyPassword('the-right-password', stored)).toBe(true);
-    expect(await verifyPassword('the-wrong-password', stored)).toBe(false);
-    expect(await verifyPassword('', stored)).toBe(false);
-    expect(await verifyPassword('the-right-password ', stored)).toBe(false);
-  });
-
-  it('compares Unicode-equivalent passwords as equal', async () => {
-    const stored = await hashPassword('e\u0301cole');
-    expect(await verifyPassword('\u00E9cole', stored)).toBe(true);
-  });
-
-  const malformed: ReadonlyArray<readonly [string, string]> = [
-    ['empty string', ''],
-    ['scheme only', 'scrypt'],
-    ['too few fields', 'scrypt$32768$8$1'],
-    ['wrong scheme', 'pbkdf2$32768$8$1$c2FsdA$aGFzaA'],
-    ['non numeric parameters', 'scrypt$a$b$c$d$e'],
-    ['empty salt', 'scrypt$32768$8$1$$aGFzaA'],
-    ['empty hash', 'scrypt$32768$8$1$c2FsdA$'],
-    ['out of range cost', 'scrypt$999999999$8$1$QUFBQUFB$QUFBQUFB'],
-  ];
-
-  it.each(malformed)('returns false instead of throwing for a %s stored value', async (_label, stored) => {
-    expect(await verifyPassword('anything', stored)).toBe(false);
   });
 });

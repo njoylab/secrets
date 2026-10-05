@@ -6,7 +6,7 @@ import { Buffer } from 'node:buffer';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { query } from '../src/lib/db.ts';
 import { resetConfigCache } from '../src/lib/env.ts';
-import { PASSWORD_VERIFIER_TEXT, decryptPayload, derivePasswordKey } from '../src/lib/content-crypto.ts';
+import { openPasswordVerifier, decryptPayload, derivePasswordKey } from '../src/lib/content-crypto.ts';
 import {
   cancelSecret,
   createSecret,
@@ -25,10 +25,11 @@ import {
   fetchSecretRow,
   deleteReceipt,
   dummyVerifier,
+  DUMMY_REVEAL_PROOF,
+  DUMMY_REVEAL_PROOF_HASH,
   forceExpire,
   forceReceiptPurge,
   insertRateLimitRow,
-  lockWithLegacyPassword,
   resetEnv,
   secretRowJson,
   sealedPasswordSecret,
@@ -123,10 +124,10 @@ describe('create and reveal without a password', () => {
     expect(delta).toBeLessThan(window + 10_000);
   });
 
-  it('ignores a password supplied at reveal time for an unprotected secret', async () => {
+  it('ignores an unnecessary reveal proof for an unprotected secret', async () => {
     const { payload } = await sealedSecret('no password needed');
     const created = await createSecret({ payload, expiresIn: '7d' });
-    expect(await revealSecret(created.token, 'an unexpected password')).toEqual({ ok: true, payload });
+    expect(await revealSecret(created.token, 'an unexpected proof')).toEqual({ ok: true, payload });
   });
 });
 
@@ -138,6 +139,7 @@ describe('create and reveal with a client-side password', () => {
     const created = await createSecret({
       payload: sealed.payload,
       verifier: sealed.verifier,
+      revealProofHash: sealed.revealProofHash,
       expiresIn: '7d',
     });
 
@@ -146,10 +148,10 @@ describe('create and reveal with a client-side password', () => {
     expect(await countSecrets()).toBe(1);
 
     const derived = await derivePasswordKey(sealed.key, PASSWORD, sealed.salt);
-    expect(await decryptPayload(sealed.verifier, derived)).toBe(PASSWORD_VERIFIER_TEXT);
+    expect(await openPasswordVerifier(sealed.verifier, derived)).toBe(sealed.revealProof);
 
-    expect(await revealSecret(created.token)).toEqual({ ok: true, payload: sealed.payload });
-    expect(await revealSecret(created.token)).toEqual({ ok: false, reason: 'unavailable' });
+    expect(await revealSecret(created.token, sealed.revealProof)).toEqual({ ok: true, payload: sealed.payload });
+    expect(await revealSecret(created.token, sealed.revealProof)).toEqual({ ok: false, reason: 'unavailable' });
     expect(await decryptPayload(sealed.payload, derived)).toBe('protected payload');
   });
 
@@ -158,6 +160,7 @@ describe('create and reveal with a client-side password', () => {
     const created = await createSecret({
       payload: sealed.payload,
       verifier: sealed.verifier,
+      revealProofHash: sealed.revealProofHash,
       expiresIn: '7d',
     });
     const check = await readPasswordVerifier(created.token);
@@ -170,8 +173,8 @@ describe('create and reveal with a client-side password', () => {
     expect(await countSecrets()).toBe(1);
 
     const derived = await derivePasswordKey(sealed.key, PASSWORD, sealed.salt);
-    expect(await decryptPayload(check.verifier, derived)).toBe(PASSWORD_VERIFIER_TEXT);
-    const result = await revealSecret(created.token);
+    expect(await openPasswordVerifier(check.verifier, derived)).toBe(sealed.revealProof);
+    const result = await revealSecret(created.token, sealed.revealProof);
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error('payload was not returned');
     expect(await decryptPayload(result.payload, derived)).toBe('still readable');
@@ -184,10 +187,11 @@ describe('create and reveal with a client-side password', () => {
     const created = await createSecret({
       payload: sealed.payload,
       verifier: sealed.verifier,
+      revealProofHash: sealed.revealProofHash,
       expiresIn: '7d',
     });
 
-    const result = await revealSecret(created.token);
+    const result = await revealSecret(created.token, sealed.revealProof);
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error('payload was not returned');
     const derived = await derivePasswordKey(sealed.key, PASSWORD, sealed.salt);
@@ -200,6 +204,7 @@ describe('create and reveal with a client-side password', () => {
     const created = await createSecret({
       payload: sealed.payload,
       verifier: sealed.verifier,
+      revealProofHash: sealed.revealProofHash,
       expiresIn: '7d',
     });
 
@@ -210,25 +215,10 @@ describe('create and reveal with a client-side password', () => {
     expect(row.ciphertext).not.toContain(PASSWORD);
     expect(await secretRowJson(created.token)).not.toContain(PASSWORD);
 
-    const result = await revealSecret(created.token);
+    const result = await revealSecret(created.token, sealed.revealProof);
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error('payload was not returned');
     expect(result.payload).not.toContain(PASSWORD);
-  });
-});
-
-describe('legacy server-side passwords', () => {
-  const PASSWORD = 'legacy-password';
-
-  it('does not consume the row when the password is wrong', async () => {
-    const { payload } = await sealedSecret('legacy');
-    const created = await createSecret({ payload, expiresIn: '7d' });
-    await lockWithLegacyPassword(created.token, PASSWORD);
-
-    expect(await revealSecret(created.token, 'wrong')).toEqual({ ok: false, reason: 'bad_password' });
-    expect(await revealSecret(created.token)).toEqual({ ok: false, reason: 'bad_password' });
-    expect(await countSecrets()).toBe(1);
-    expect(await revealSecret(created.token, PASSWORD)).toEqual({ ok: true, payload });
   });
 });
 
@@ -252,28 +242,18 @@ describe('decryption failures', () => {
     const created = await createSecret({
       payload: sealed.payload,
       verifier: sealed.verifier,
+      revealProofHash: sealed.revealProofHash,
       expiresIn: '7d',
     });
 
     await withWrongKey(async () => {
       expect(await readPasswordVerifier(created.token)).toEqual({ ok: false, reason: 'undecryptable' });
-      expect(await revealSecret(created.token)).toEqual({ ok: false, reason: 'undecryptable' });
+      expect(await revealSecret(created.token, sealed.revealProof)).toEqual({ ok: false, reason: 'undecryptable' });
       expect(await countSecrets()).toBe(1);
     }, 9);
 
-    expect(await revealSecret(created.token)).toEqual({ ok: true, payload: sealed.payload });
+    expect(await revealSecret(created.token, sealed.revealProof)).toEqual({ ok: true, payload: sealed.payload });
     expect(await countSecrets()).toBe(0);
-  });
-
-  it('reports a wrong legacy password rather than undecryptable when the key is wrong', async () => {
-    const { payload } = await sealedSecret('protected');
-    const created = await createSecret({ payload, expiresIn: '7d' });
-    await lockWithLegacyPassword(created.token, 'pw-probe');
-
-    await withWrongKey(async () => {
-      expect(await revealSecret(created.token, 'wrong')).toEqual({ ok: false, reason: 'bad_password' });
-      expect(await countSecrets()).toBe(1);
-    }, 3);
   });
 
   it('does not consume a secret whose ciphertext was tampered with', async () => {
@@ -354,11 +334,32 @@ describe('decryption failures', () => {
 });
 
 describe('peekSecretPresence', () => {
+  it.each([
+    ['missing proof hash', 'reveal_proof_hash = NULL'],
+    ['missing verifier', 'password_verifier = NULL'],
+    ['unsupported password hash', "password_hash = 'unsupported'"],
+  ])('refuses %s without consuming or exposing a verifier', async (_label, assignment) => {
+    const created = await createSecret({
+      payload: (await sealedSecret('unsupported record')).payload,
+      verifier: await dummyVerifier(),
+      revealProofHash: DUMMY_REVEAL_PROOF_HASH,
+      expiresIn: '7d',
+    });
+    const row = await fetchSecretRow(created.token);
+    await query(`UPDATE secrets SET ${assignment} WHERE token_hash = $1`, [row!.token_hash]);
+    expect(await peekSecretPresence(created.token)).toBeNull();
+    expect(await readPasswordVerifier(created.token)).toEqual({ ok: false, reason: 'unavailable' });
+    expect(await revealSecret(created.token)).toEqual({ ok: false, reason: 'unavailable' });
+    expect(await countSecrets()).toBe(1);
+    expect(await countReceipts()).toBe(0);
+  });
+
   it('reports whether a password is required without consuming the secret', async () => {
     const open = await createSecret({ payload: (await sealedSecret('open secret')).payload, expiresIn: '7d' });
     const locked = await createSecret({
       payload: (await sealedSecret('locked secret')).payload,
       verifier: await dummyVerifier(),
+      revealProofHash: DUMMY_REVEAL_PROOF_HASH,
       expiresIn: '7d',
     });
 
@@ -412,12 +413,12 @@ describe('expiration', () => {
     expect(await countSecrets()).toBe(0);
   });
 
-  it('never reveals a protected secret that expired, even with the right password', async () => {
+  it('never reveals a protected secret that expired, even with the right proof', async () => {
     const { payload } = await sealedSecret('expired and locked');
-    const created = await createSecret({ payload, verifier: await dummyVerifier(), expiresIn: '1d' });
+    const created = await createSecret({ payload, verifier: await dummyVerifier(), revealProofHash: DUMMY_REVEAL_PROOF_HASH, expiresIn: '1d' });
     await setExpiresInSeconds(created.token, -1);
 
-    expect(await revealSecret(created.token, 'pw')).toEqual({ ok: false, reason: 'unavailable' });
+    expect(await revealSecret(created.token, DUMMY_REVEAL_PROOF)).toEqual({ ok: false, reason: 'unavailable' });
   });
 
   it('stays unavailable for an expired secret even with a wrong key', async () => {
@@ -522,7 +523,7 @@ describe('readControlStatus', () => {
 
   it('never returns the payload, the ciphertext or the share token', async () => {
     const { payload } = await sealedSecret('control link privacy');
-    const created = await createSecret({ payload, verifier: await dummyVerifier(), expiresIn: '7d' });
+    const created = await createSecret({ payload, verifier: await dummyVerifier(), revealProofHash: DUMMY_REVEAL_PROOF_HASH, expiresIn: '7d' });
 
     const status = await readControlStatus(created.controlToken);
     expect(Object.keys(status ?? {}).sort()).toEqual(['expiresAt', 'state']);
@@ -533,7 +534,7 @@ describe('readControlStatus', () => {
 describe('cancelSecret', () => {
   it('deletes a pending secret, writes a cancelled receipt and blocks the reveal', async () => {
     const { payload } = await sealedSecret('cancel target');
-    const created = await createSecret({ payload, verifier: await dummyVerifier(), expiresIn: '7d' });
+    const created = await createSecret({ payload, verifier: await dummyVerifier(), revealProofHash: DUMMY_REVEAL_PROOF_HASH, expiresIn: '7d' });
 
     const result = await cancelSecret(created.controlToken);
     expect(result.ok).toBe(true);
@@ -604,6 +605,7 @@ describe('cancelSecret', () => {
       payload: (await sealedSecret('locked control')).payload,
       expiresIn: '7d',
       verifier: await dummyVerifier(),
+      revealProofHash: DUMMY_REVEAL_PROOF_HASH,
     });
 
     // The control link is not a credential: holding it is what authorises the
