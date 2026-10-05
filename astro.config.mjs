@@ -5,11 +5,16 @@ import { defineConfig } from 'astro/config';
  * Hostnames this deployment answers to.
  *
  * Astro only honours `X-Forwarded-Host` when the host matches this list, and
- * with an empty list it rebuilds every `request.url` as `http://localhost`, which
- * would both break generated links and make legitimate browser POSTs look
- * cross-origin. Entries may use a leading `*.` wildcard.
+ * with an empty list it rebuilds every `request.url` as `http://localhost`.
+ * Entries may use a leading `*.` wildcard.
  *
- * Defaults cover local development only; set ALLOWED_HOSTS in production.
+ * This no longer decides the origin of the generated links: the page composes
+ * them from the origin it was served from. It still governs Astro's own
+ * same-origin check on form-like POSTs.
+ *
+ * Read at BUILD time. `npm run build` does not load `.env`, so export the
+ * variable in the build environment: the default below covers local development
+ * only, and set ALLOWED_HOSTS in production.
  */
 const allowedDomains = (process.env.ALLOWED_HOSTS ?? 'localhost,127.0.0.1')
   .split(',')

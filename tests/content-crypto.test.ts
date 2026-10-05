@@ -26,6 +26,7 @@ import {
   derivePasswordKey,
   decryptPayload,
   isSealedEnvelope,
+  controlUrl,
   shareUrl,
 } from '../src/lib/content-crypto.ts';
 
@@ -288,11 +289,19 @@ describe('share links', () => {
     expect(shareUrl('http://127.0.0.1:4321/create', token)).toBe(`http://127.0.0.1:4321/s/${token}`);
   });
 
+  it('builds the control URL the same way, so both links share one origin', () => {
+    expect(controlUrl('https://secrets.example/anything', token)).toBe(`https://secrets.example/c/${token}`);
+    expect(controlUrl('http://127.0.0.1:4321/create', token)).toBe(`http://127.0.0.1:4321/c/${token}`);
+  });
+
   it('refuses a token or an origin that cannot carry the key', () => {
     expect(shareUrl('https://secrets.example', 'short')).toBeNull();
     expect(shareUrl('https://secrets.example', `${token}x`)).toBeNull();
     expect(shareUrl('not a url', token)).toBeNull();
     expect(shareUrl('javascript:alert(1)', token)).toBeNull();
+    expect(controlUrl('https://secrets.example', 'short')).toBeNull();
+    expect(controlUrl('not a url', token)).toBeNull();
+    expect(controlUrl('javascript:alert(1)', token)).toBeNull();
   });
 
   it('round-trips a fragment that also carries a password salt', () => {

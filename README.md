@@ -116,10 +116,20 @@ once. With a password, the link alone is not enough.
 Two separate mechanisms, easy to confuse:
 
 `ALLOWED_HOSTS` feeds `security.allowedDomains` in `astro.config.mjs` and is read
-at **build** time, so rebuild after changing it. With an empty list Astro
-rebuilds every `request.url` as `http://localhost`, which would break generated
-links and make legitimate browser POSTs look cross-origin. The default covers
-local development only: set your real hostname in production.
+at **build** time, so rebuild after changing it. With an empty list Astro rebuilds
+every `request.url` as `http://localhost`. That no longer reaches the generated
+links — the page composes both of them from the origin it was served from, see
+below — but it does still affect Astro's own CSRF check on form-like POSTs, so set
+your real hostname in production anyway. The default covers local development
+only. Note that `npm run build` does not load `.env`: export the variable in the
+build environment, or the manifest silently keeps the development default.
+
+**Links are composed by the page, never by the server.** `POST /api/secrets`
+returns the two tokens and no absolute URL. The browser joins them to
+`window.location.origin`, so a control link cannot be handed to a host the user
+never visited, and the content key still never travels in a response body. A
+reverse proxy that this process does not recognise therefore cannot corrupt the
+links it produces.
 
 `TRUSTED_PROXIES` controls who may supply `X-Forwarded-For`, and must list the
 addresses of proxies you actually control. `server.mjs` strips every

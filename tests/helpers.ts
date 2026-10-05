@@ -240,6 +240,11 @@ export function shareLink(base: string, token: string, keyText: string): string 
   return `${base}/s/${token}#${keyText}`;
 }
 
+/** The control link, composed the way the page composes it. */
+export function controlLink(base: string, controlToken: string): string {
+  return `${base}/c/${controlToken}`;
+}
+
 /** Await a rejected `createSecret` and return the typed validation error. */
 export async function captureSecretError(promise: Promise<unknown>): Promise<SecretValidationError> {
   try {

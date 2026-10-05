@@ -165,10 +165,16 @@ export function decodeShareFragment(text: string | null | undefined): ShareFragm
 }
 
 /**
- * Same-origin share URL. The content key is appended by the caller and must
- * never be attached to an origin the page itself was not loaded from.
+ * Same-origin link to a token URL of this service.
+ *
+ * Both generated links are built here, from the origin the page was loaded
+ * from, never from an absolute URL a response carried: behind a reverse proxy
+ * the server rebuilds `request.url` from headers it may not recognise, so a link
+ * assembled server-side can point at a host the user never visited. The content
+ * key is appended by the caller and must never be attached to an origin the page
+ * itself was not loaded from.
  */
-export function shareUrl(pageOrigin: string, token: string): string | null {
+export function tokenUrl(pageOrigin: string, section: 's' | 'c', token: string): string | null {
   if (!SHARE_TOKEN_SHAPE.test(token)) return null;
   let url: URL;
   try {
@@ -177,7 +183,17 @@ export function shareUrl(pageOrigin: string, token: string): string | null {
     return null;
   }
   if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
-  return `${url.origin}/s/${token}`;
+  return `${url.origin}/${section}/${token}`;
+}
+
+/** Same-origin one-time share link. */
+export function shareUrl(pageOrigin: string, token: string): string | null {
+  return tokenUrl(pageOrigin, 's', token);
+}
+
+/** Same-origin control link: cancels the secret, so it must reach this deployment. */
+export function controlUrl(pageOrigin: string, token: string): string | null {
+  return tokenUrl(pageOrigin, 'c', token);
 }
 
 /**

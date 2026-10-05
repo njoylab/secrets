@@ -18,6 +18,7 @@ const t = getDictionary(Astro.locals.locale);
 <script>
   import {
     PASSWORD_VERIFIER_TEXT,
+    controlUrl,
     derivePasswordKey,
     encodeShareFragment,
     encryptPayload,
@@ -29,8 +30,7 @@ const t = getDictionary(Astro.locals.locale);
   interface CreateApiResponse {
     ok?: boolean;
     token?: string;
-    url?: string;
-    controlUrl?: string;
+    controlToken?: string;
     expiresAt?: string;
     message?: string;
   }
@@ -234,12 +234,17 @@ const t = getDictionary(Astro.locals.locale);
     };
 
     const showResult = (payload: CreateApiResponse, preset: string, keyFragment: string): boolean => {
-      // The key is attached only to this page's origin. A URL supplied by the
-      // response is ignored, so a confused host cannot receive the fragment.
+      // Both links are attached to this page's origin. Absolute URLs from the
+      // response are never used, so neither the content key nor a host this
+      // process may have misresolved can be sent to a third party.
       const share = typeof payload.token === 'string' ? shareUrl(window.location.origin, payload.token) : null;
-      if (!share) return false;
+      const control =
+        typeof payload.controlToken === 'string'
+          ? controlUrl(window.location.origin, payload.controlToken)
+          : null;
+      if (!share || !control) return false;
       shareRow.field.value = `${share}#${keyFragment}`;
-      controlRow.field.value = payload.controlUrl ?? '';
+      controlRow.field.value = control;
       expiryPreset.textContent = expiryLabels[preset] ?? '';
       expiryValue.textContent = formatInstant(payload.expiresAt ?? '', expiryValue.dataset.locale ?? 'en');
       // The password leaves the form only when it was actually set, and only into
@@ -309,7 +314,7 @@ const t = getDictionary(Astro.locals.locale);
           !response.ok ||
           payloadBody.ok !== true ||
           typeof payloadBody.token !== 'string' ||
-          typeof payloadBody.controlUrl !== 'string'
+          typeof payloadBody.controlToken !== 'string'
         ) {
           showError(null, typeof payloadBody.message === 'string' ? payloadBody.message : serverError);
           return;

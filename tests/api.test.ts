@@ -19,6 +19,7 @@ import {
   countRateLimits,
   countReceipts,
   countSecrets,
+  controlLink,
   fetchRateLimitRows,
   resetEnv,
   dummyVerifier,
@@ -80,8 +81,11 @@ describe('POST /api/secrets', () => {
     expect(reply.body.ok).toBe(true);
     expect(reply.body.requiresPassword).toBe(true);
     expect(reply.text).not.toContain('pw-probe');
-    expect(reply.body.url).toBe(`${ORIGIN}/s/${String(reply.body.token)}`);
-    expect(String(reply.body.controlUrl)).toMatch(new RegExp(`^${ORIGIN}/c/[A-Za-z0-9_-]{43}$`));
+    // Two tokens, no absolute URL: the page owns the origin both links are built on.
+    expect(String(reply.body.token)).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(String(reply.body.controlToken)).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(reply.body.url).toBeUndefined();
+    expect(reply.body.controlUrl).toBeUndefined();
     expect(reply.body.expiresAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
@@ -92,8 +96,29 @@ describe('POST /api/secrets', () => {
     // The key lives in the page, not in a response body: an observer of the JSON
     // alone cannot reconstruct the link.
     expect(reply.text).not.toContain(keyText);
-    expect(String(reply.body.url)).not.toContain('#');
+    expect(reply.text).not.toContain('#');
     expect(reply.text).not.toContain(payload);
+  });
+
+  it('returns tokens that produce correct links even when the request URL is unusable', async () => {
+    // Behind a proxy whose hostname is not in ALLOWED_HOSTS, the Node adapter
+    // rebuilds request.url as http://localhost. Nothing derived from that URL
+    // may reach the reply: the page builds both links from its own origin.
+    const { payload } = await sealedSecret('misresolved host');
+    const response = await createEndpoint({
+      request: new Request('http://localhost/api/secrets', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', host: 'secrets.example.com' },
+        body: JSON.stringify({ payload, expiresIn: '7d' }),
+      }),
+      locals: { locale: 'en', peerAddress: CLIENT_IP },
+    } as unknown as APIContext);
+    const text = await response.text();
+
+    expect(text).not.toContain('localhost');
+    const body = JSON.parse(text) as Record<string, unknown>;
+    expect(shareLink(ORIGIN, String(body.token), 'k')).toBe(`${ORIGIN}/s/${String(body.token)}#k`);
+    expect(controlLink(ORIGIN, String(body.controlToken))).toBe(`${ORIGIN}/c/${String(body.controlToken)}`);
   });
 
   it('returns a 422 with a typed error for an unknown expiry preset', async () => {
@@ -227,7 +252,7 @@ describe('POST /api/secrets/cancel', () => {
   it('cancels a pending secret and reports the state', async () => {
     const { payload } = await sealedSecret('cancel me');
     const created = await create({ payload, expiresIn: '7d' });
-    const controlToken = String(created.body.controlUrl).split('/c/')[1] ?? '';
+    const controlToken = String(created.body.controlToken);
 
     const reply = await cancel({ token: controlToken });
     expect(reply.status).toBe(200);
@@ -243,7 +268,7 @@ describe('POST /api/secrets/cancel', () => {
   it('reports read after the secret was read, without changing it', async () => {
     const { payload } = await sealedSecret('already read');
     const created = await create({ payload, expiresIn: '7d' });
-    const controlToken = String(created.body.controlUrl).split('/c/')[1] ?? '';
+    const controlToken = String(created.body.controlToken);
     await reveal({ token: String(created.body.token) });
 
     const reply = await cancel({ token: controlToken });
@@ -265,7 +290,7 @@ describe('POST /api/secrets/cancel', () => {
     // separate counter, so these attempts do not touch the reveal bucket.
     const { payload } = await sealedSecret('budget');
     const created = await create({ payload, expiresIn: '7d' });
-    const controlToken = String(created.body.controlUrl).split('/c/')[1] ?? '';
+    const controlToken = String(created.body.controlToken);
 
     const statuses: number[] = [];
     for (let attempt = 0; attempt < 7; attempt += 1) {
@@ -283,7 +308,7 @@ describe('POST /api/secrets/cancel', () => {
   it('refuses a cross-origin cancel without touching the row', async () => {
     const { payload } = await sealedSecret('cancel origin');
     const created = await create({ payload, expiresIn: '7d' });
-    const controlToken = String(created.body.controlUrl).split('/c/')[1] ?? '';
+    const controlToken = String(created.body.controlToken);
 
     const response = await cancelEndpoint({
       request: new Request(`${ORIGIN}/api/secrets/cancel`, {
@@ -303,7 +328,7 @@ describe('the two links, end to end', () => {
   it('keeps the content key out of every response the server sends', async () => {
     const { payload, keyText } = await sealedSecret('end to end');
     const created = await create({ payload, expiresIn: '1d', verifier: await dummyVerifier() });
-    const controlToken = String(created.body.controlUrl).split('/c/')[1] ?? '';
+    const controlToken = String(created.body.controlToken);
 
     const statuses = [await reveal({ token: String(created.body.token) })];
     expect(statuses[0]?.body.payload).toBe(payload);
@@ -311,8 +336,8 @@ describe('the two links, end to end', () => {
     const link = shareLink(ORIGIN, String(created.body.token), keyText);
     // Only the page composes the fragment, and it does it from memory.
     expect(link).toBe(`${ORIGIN}/s/${String(created.body.token)}#${keyText}`);
-    expect(String(created.body.url)).not.toContain(keyText);
-    expect(String(created.body.controlUrl)).not.toContain(keyText);
+    expect(created.text).not.toContain(keyText);
+    expect(controlLink(ORIGIN, controlToken)).not.toContain(keyText);
     expect(controlToken).not.toBe(String(created.body.token));
   });
 });

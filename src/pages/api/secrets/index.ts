@@ -1,11 +1,15 @@
 /**
- * POST /api/secrets — create a secret and return its links.
+ * POST /api/secrets — create a secret and return its tokens.
  *
  * The body carries a payload the browser already sealed with a key that never
  * leaves the client. An optional verifier is sealed under the same key after
  * the password has been mixed in. This endpoint never sees the plaintext, the
  * content key or the password. A `password` field is refused: storing one here
  * would look like protection the server cannot actually provide.
+ *
+ * The reply carries the two tokens, not the links. Behind a reverse proxy this
+ * process may rebuild `request.url` to a host it does not recognise, and the
+ * page is the only party that knows the origin the user is actually on.
  */
 import type { APIRoute } from 'astro';
 import { getConfig } from '../../../lib/env.ts';
@@ -37,16 +41,15 @@ export const POST: APIRoute = async (context) => {
     });
 
     const config = getConfig();
-    const origin = new URL(context.request.url).origin;
     return jsonResponse(
       {
         ok: true,
+        // Tokens only, never an absolute URL and never a fragment: this process
+        // does not necessarily know the public origin behind its proxy, and the
+        // content key must never travel through this response, so the page
+        // assembles both links from the origin it was served from.
         token: created.token,
-        // No fragment here: the content key is composed by the page and never
-        // travels through this response, so a network observer of the JSON alone
-        // cannot reconstruct the link.
-        url: `${origin}/s/${created.token}`,
-        controlUrl: `${origin}/c/${created.controlToken}`,
+        controlToken: created.controlToken,
         expiresAt: created.expiresAt.toISOString(),
         requiresPassword: typeof body.verifier === 'string' && body.verifier.length > 0,
         secureCookies: config.secureCookies,
