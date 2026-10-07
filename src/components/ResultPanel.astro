@@ -121,6 +121,30 @@ const t = getDictionary(locale);
     <span id="result-expiry-value" class="meta-value" data-locale={locale}></span>
   </p>
 
+  <!--
+    The QR encodes the share link with the key in its fragment, so it is only
+    drawn once the link exists. It is a canvas rather than an image: it is
+    generated in the browser from a string that never leaves the page, and an
+    image element would need a data URL or an object URL to hold it.
+  -->
+  <div class="field" id="result-qr-field" hidden>
+    <p class="field-head">
+      <span class="field-label" id="result-qr-label">{t.result.qrLabel}</span>
+    </p>
+    <canvas
+      id="result-qr"
+      class="qr"
+      role="img"
+      aria-labelledby="result-qr-label"
+      aria-describedby="result-qr-hint"
+      width="232"
+      height="232"
+      hidden
+    >
+    </canvas>
+    <p class="note" id="result-qr-hint">{t.result.qrHint}</p>
+  </div>
+
   <p class="note" id="result-note">{t.result.noteKeyInFragment}</p>
 
   <p class="status" id="result-status" role="status" aria-live="polite"></p>

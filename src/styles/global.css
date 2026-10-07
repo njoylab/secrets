@@ -331,7 +331,8 @@ main:focus-visible {
   gap: 8px;
 }
 
-label {
+label,
+.field-label {
   font-family: var(--font-mono);
   font-size: 0.75rem;
   letter-spacing: 0.06em;
@@ -476,6 +477,19 @@ input.input-mono {
   align-self: flex-start;
 }
 
+/* The QR code is the one light element on a dark page, so it sits on its own
+ * light plate with a hairline border: a scanner needs the contrast, and the
+ * border keeps the plate from bleeding into the panel. */
+.qr {
+  display: block;
+  width: 232px;
+  max-width: 100%;
+  height: auto;
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
 /* Result link and copy controls */
 .copy-row {
   display: flex;
@@ -514,6 +528,22 @@ input.input-mono {
 .meta-value:empty {
   display: inline-block;
   min-width: 13ch;
+}
+
+/* Several instants stack as label and value pairs rather than as separate
+ * paragraphs, so the control page reads as one block. */
+.meta-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.meta-list .meta {
+  margin: 0;
+}
+
+.meta-list .meta-value {
+  margin: 0;
 }
 
 /* Revealed secret: whitespace and newlines are preserved exactly. */

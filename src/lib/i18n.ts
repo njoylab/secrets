@@ -49,6 +49,8 @@ export type Dictionary = {
     copied: string;
     copyFailed: string;
     expires: string;
+    qrLabel: string;
+    qrHint: string;
     another: string;
     passwordLabel: string;
     passwordShow: string;
@@ -77,6 +79,8 @@ export type Dictionary = {
     cancelled: string;
     unavailable: string;
     expires: string;
+    created: string;
+    closed: string;
     cancel: string;
     cancelling: string;
     cancelFailed: string;
@@ -155,6 +159,8 @@ const it: Dictionary = {
     copied: 'Copiato',
     copyFailed: 'Copia non riuscita',
     expires: 'Scadenza',
+    qrLabel: 'Codice QR',
+    qrHint: 'Scansiona per aprire il link. Contiene la chiave.',
     another: 'Nuovo segreto',
     passwordLabel: 'Password',
     passwordShow: 'Mostra password',
@@ -185,6 +191,8 @@ const it: Dictionary = {
     cancelled: 'Annullato',
     unavailable: 'Link non disponibile',
     expires: 'Scadenza',
+    created: 'Creato',
+    closed: 'Chiuso',
     cancel: 'Annulla segreto',
     cancelling: 'Annullamento…',
     cancelFailed: 'Annullamento non riuscito',
@@ -262,6 +270,8 @@ const en: Dictionary = {
     copied: 'Copied',
     copyFailed: 'Copy failed',
     expires: 'Expires',
+    qrLabel: 'QR code',
+    qrHint: 'Scan to open the link. It carries the key.',
     another: 'New secret',
     passwordLabel: 'Password',
     passwordShow: 'Show password',
@@ -292,6 +302,8 @@ const en: Dictionary = {
     cancelled: 'Cancelled',
     unavailable: 'Link unavailable',
     expires: 'Expires',
+    created: 'Created',
+    closed: 'Closed',
     cancel: 'Cancel secret',
     cancelling: 'Cancelling…',
     cancelFailed: 'Cancellation failed',

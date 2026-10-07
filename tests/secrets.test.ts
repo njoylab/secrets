@@ -474,6 +474,10 @@ describe('readControlStatus', () => {
     const status = await readControlStatus(created.controlToken);
     expect(status?.state).toBe('pending');
     expect(status?.expiresAt?.toISOString()).toBe(created.expiresAt.toISOString());
+    // A live secret knows when it was made and has not closed yet.
+    expect(status?.createdAt).toBeInstanceOf(Date);
+    expect(status?.createdAt!.getTime()).toBeLessThanOrEqual(status!.expiresAt!.getTime());
+    expect(status?.closedAt).toBeNull();
 
     // Reading the control link, like reloading its page, is not consumption.
     for (let attempt = 0; attempt < 10; attempt += 1) {
@@ -496,11 +500,21 @@ describe('readControlStatus', () => {
   it('reports read after a reveal, and cancelled after a cancel', async () => {
     const read = await createSecret({ payload: (await sealedSecret('was read')).payload, expiresIn: '7d' });
     await revealSecret(read.token);
-    expect((await readControlStatus(read.controlToken))?.state).toBe('read');
+    const afterRead = await readControlStatus(read.controlToken);
+    expect(afterRead?.state).toBe('read');
+    // The row is gone, so the receipt supplies the closing instant and the
+    // creation instant is no longer available.
+    expect(afterRead?.closedAt).toBeInstanceOf(Date);
+    expect(afterRead?.createdAt).toBeNull();
 
     const cancelled = await createSecret({ payload: (await sealedSecret('was cancelled')).payload, expiresIn: '7d' });
     await cancelSecret(cancelled.controlToken);
-    expect((await readControlStatus(cancelled.controlToken))?.state).toBe('cancelled');
+    const afterCancel = await readControlStatus(cancelled.controlToken);
+    expect(afterCancel?.state).toBe('cancelled');
+    expect(afterCancel?.closedAt).toBeInstanceOf(Date);
+    expect(afterCancel?.createdAt).toBeNull();
+    // Closing never precedes the expiry the row was created with.
+    expect(afterCancel?.closedAt!.getTime()).toBeLessThanOrEqual(afterCancel!.expiresAt!.getTime());
   });
 
   it('returns null for an unknown, malformed or purged control token', async () => {
@@ -526,7 +540,10 @@ describe('readControlStatus', () => {
     const created = await createSecret({ payload, verifier: await dummyVerifier(), revealProofHash: DUMMY_REVEAL_PROOF_HASH, expiresIn: '7d' });
 
     const status = await readControlStatus(created.controlToken);
-    expect(Object.keys(status ?? {}).sort()).toEqual(['expiresAt', 'state']);
+    // Enumerated rather than asserted field by field: a control link may report
+    // instants and a state, and nothing else. The ciphertext, the payload and
+    // the share token must never appear here.
+    expect(Object.keys(status ?? {}).sort()).toEqual(['closedAt', 'createdAt', 'expiresAt', 'state']);
     expect(JSON.stringify(status)).not.toContain(payload);
   });
 });
@@ -610,9 +627,15 @@ describe('cancelSecret', () => {
 
     // The control link is not a credential: holding it is what authorises the
     // cancel, so no password is read, hashed or compared anywhere in the path.
-    expect(await cancelSecret(created.controlToken)).toEqual({
-      ok: true,
-      status: { state: 'cancelled', expiresAt: created.expiresAt },
+    const result = await cancelSecret(created.controlToken);
+    if (!result.ok) expect.unreachable('the control token was just created');
+    // A cancelled secret is reported from its receipt, so the creation instant is
+    // gone with the row and only the closing instant remains.
+    expect(result.status).toEqual({
+      state: 'cancelled',
+      expiresAt: created.expiresAt,
+      createdAt: null,
+      closedAt: expect.any(Date),
     });
   });
 });

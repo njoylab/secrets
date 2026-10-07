@@ -8,8 +8,9 @@ to keep the at-rest ciphertext unreadable from a database dump alone.
 
 Each secret gets two links: the **share link** `/s/<token>#<key>`, and a
 **control link** `/c/<control token>` that only ever reports the state of the
-secret (`pending`, `read`, `expired`, `cancelled`) and can cancel it. The share
-link is redeemed at most once: consumption is a conditional
+secret (`pending`, `read`, `expired`, `cancelled`), when it was created and
+closed, and can cancel it. The share link is redeemed at most once: consumption
+is a conditional
 `DELETE ... RETURNING` executed by the database, so concurrent readers cannot
 both obtain the content. Secrets expire after 1 hour to 30 days (default 7) and
 an optional password can gate the read. The app is an Astro 7 SSR project served
@@ -180,6 +181,42 @@ timer, for example every hour:
 ```
 17 * * * * cd /srv/secrets && npm run cleanup
 ```
+
+## QR code and control link instants
+
+Two additions on top of the MVP, both of which only touch what a link already
+exposes.
+
+**The QR code** of the share link is drawn by `src/lib/qr.ts`, a byte-mode
+encoder written for this project: Reed-Solomon over GF(256), block interleaving,
+the eight data masks with the four penalty rules, and the BCH format and version
+information. It runs in the browser on a `<canvas>` and draws runs of dark
+modules, so no image request, data URL or third-party script is involved and no
+asset reaches the page from anywhere but this origin.
+
+The encoder is deliberately narrow: byte mode only, no ECI, no kanji, no Micro
+QR. It exists to render one short ASCII link, and everything else is left out
+rather than half implemented. Because a silent bug here produces a code no
+scanner can read, `tests/qr.test.ts` verifies it by decoding its own output back
+(format information, unmask, zigzag walk, de-interleave, then a Reed-Solomon
+syndrome check per block) and cross-checks the resulting codewords against
+`qrcode-generator`, pinned as a **dev** dependency for that purpose only. It is
+never imported by `src/` and never reaches the bundle. The one thing the two
+implementations are allowed to disagree on is which mask they pick, since the
+reference library scores masks with a non-standard penalty function.
+
+The code encodes the full share link including the key in its fragment, so it is
+drawn only once the link exists and the canvas is cleared when the result panel
+is reset, rather than left holding key material behind a hidden element.
+
+**The control link instants** come from columns that already existed:
+`secrets.created_at` and `secret_receipts.closed_at`. No migration was needed.
+A pending secret shows when it was created and when it expires; once it closes,
+the row is gone, so the creation instant disappears and the closing instant takes
+its place. The cancel endpoint returns the instants alongside the new state so
+the page repaints in place instead of waiting for a reload. These are instants
+and nothing else: `tests/secrets.test.ts` enumerates the fields a control link
+may return and fails if anything else appears.
 
 ## Deployment on Node
 

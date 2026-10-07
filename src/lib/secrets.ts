@@ -164,6 +164,18 @@ export type ControlState = 'pending' | 'read' | 'expired' | 'cancelled';
 export interface ControlStatus {
   readonly state: ControlState;
   readonly expiresAt: Date | null;
+  /**
+   * When the secret was created. Present while the row is live, and absent once
+   * it is gone: a receipt deliberately keeps no creation instant, because the
+   * row it describes no longer exists.
+   */
+  readonly createdAt: Date | null;
+  /**
+   * When the secret actually closed, which for a receipt is the moment the row
+   * was deleted. Null while the secret is still pending, since it has not closed
+   * yet.
+   */
+  readonly closedAt: Date | null;
 }
 
 export type CancelResult =
@@ -184,10 +196,12 @@ interface ConsumedRow {
 }
 
 interface ControlStatusRow {
+  live_created_at: Date | null;
   live_expires_at: Date | null;
   live_is_expired: boolean | null;
   receipt_state: ControlState | null;
   receipt_expires_at: Date | null;
+  receipt_closed_at: Date | null;
 }
 
 /**
@@ -347,16 +361,19 @@ export async function readControlStatus(controlToken: string): Promise<ControlSt
   const controlHash = hashToken(controlToken);
 
   const { rows } = await query<ControlStatusRow>(
-    `SELECT live.expires_at AS live_expires_at,
+    `SELECT live.created_at AS live_created_at,
+            live.expires_at AS live_expires_at,
             (live.expires_at <= now()) AS live_is_expired,
             receipt.state AS receipt_state,
-            receipt.expires_at AS receipt_expires_at
+            receipt.expires_at AS receipt_expires_at,
+            receipt.closed_at AS receipt_closed_at
        FROM (SELECT 1) AS anchor
        LEFT JOIN LATERAL (
-         SELECT s.expires_at FROM secrets s WHERE s.control_hash = $1
+         SELECT s.created_at, s.expires_at FROM secrets s WHERE s.control_hash = $1
        ) AS live ON true
        LEFT JOIN LATERAL (
-         SELECT r.state, r.expires_at FROM secret_receipts r WHERE r.control_hash = $1
+         SELECT r.state, r.expires_at, r.closed_at
+           FROM secret_receipts r WHERE r.control_hash = $1
        ) AS receipt ON true`,
     [controlHash],
   );
@@ -370,10 +387,19 @@ export async function readControlStatus(controlToken: string): Promise<ControlSt
     return {
       state: row.live_is_expired === true ? 'expired' : 'pending',
       expiresAt: row.live_expires_at,
+      createdAt: row.live_created_at,
+      closedAt: null,
     };
   }
   if (row.receipt_state) {
-    return { state: row.receipt_state, expiresAt: row.receipt_expires_at };
+    return {
+      state: row.receipt_state,
+      expiresAt: row.receipt_expires_at,
+      // The row is gone, so there is no creation instant left to report. The
+      // receipt only knows when it closed.
+      createdAt: null,
+      closedAt: row.receipt_closed_at,
+    };
   }
   return null;
 }

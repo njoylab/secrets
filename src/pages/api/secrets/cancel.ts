@@ -38,6 +38,11 @@ export const POST: APIRoute = async (context) => {
       ok: true,
       state: result.status.state,
       expiresAt: result.status.expiresAt?.toISOString() ?? null,
+      // The instants travel with the reply so the page can repaint in place
+      // instead of waiting for a reload: after a cancel the creation instant is
+      // gone and the closing instant has taken its place.
+      createdAt: result.status.createdAt?.toISOString() ?? null,
+      closedAt: result.status.closedAt?.toISOString() ?? null,
     },
     { status: 200, locale },
   );

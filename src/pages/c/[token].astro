@@ -25,7 +25,12 @@ const formatInstant = (value: Date, tag: string): string => {
   }
 };
 
+// Instants the control link can show. The creation instant only exists while the
+// row is live and the closing instant only once it is gone, so either can be
+// absent and the row that carries it is hidden.
 const expiresAt = status?.expiresAt ? formatInstant(status.expiresAt, locale) : '';
+const createdAt = status?.createdAt ? formatInstant(status.createdAt, locale) : '';
+const closedAt = status?.closedAt ? formatInstant(status.closedAt, locale) : '';
 ---
 
 <Layout title={t.control.title}>
@@ -79,12 +84,26 @@ const expiresAt = status?.expiresAt ? formatInstant(status.expiresAt, locale) : 
           </p>
         </div>
 
-        {expiresAt && (
-          <p class="meta">
-            <span class="meta-label">{t.control.expires}</span>
-            <span id="control-expiry">{expiresAt}</span>
-          </p>
-        )}
+        <!--
+          All three instants are always present and only the populated ones are
+          shown, so a cancel can swap the creation instant for the closing one
+          without a reload. An empty row is removed from the accessibility tree
+          and from the layout rather than left as a blank line.
+        -->
+        <dl class="meta-list">
+          <div class="meta" id="control-created-row" hidden={!createdAt}>
+            <dt class="meta-label">{t.control.created}</dt>
+            <dd class="meta-value" id="control-created">{createdAt}</dd>
+          </div>
+          <div class="meta" id="control-expiry-row" hidden={!expiresAt}>
+            <dt class="meta-label">{t.control.expires}</dt>
+            <dd class="meta-value" id="control-expiry">{expiresAt}</dd>
+          </div>
+          <div class="meta" id="control-closed-row" hidden={!closedAt}>
+            <dt class="meta-label">{t.control.closed}</dt>
+            <dd class="meta-value" id="control-closed">{closedAt}</dd>
+          </div>
+        </dl>
 
         <form
           id="control-form"
@@ -117,6 +136,9 @@ const expiresAt = status?.expiresAt ? formatInstant(status.expiresAt, locale) : 
     state?: string;
     error?: string;
     message?: string;
+    expiresAt?: string | null;
+    createdAt?: string | null;
+    closedAt?: string | null;
   }
 
   const STATES = ['pending', 'read', 'expired', 'cancelled'] as const;
@@ -150,6 +172,50 @@ const expiresAt = status?.expiresAt ? formatInstant(status.expiresAt, locale) : 
     const serverError = form.dataset.errorServer ?? '';
     const cancelIdle = cancelButton.dataset.labelIdle ?? '';
     const cancelBusy = cancelButton.dataset.labelBusy ?? cancelIdle;
+    const locale = document.documentElement.lang || 'en';
+
+    const instantRows = {
+      created: byId<HTMLElement>('control-created-row'),
+      expires: byId<HTMLElement>('control-expiry-row'),
+      closed: byId<HTMLElement>('control-closed-row'),
+    };
+    const instantValues = {
+      created: byId<HTMLElement>('control-created'),
+      expires: byId<HTMLElement>('control-expiry'),
+      closed: byId<HTMLElement>('control-closed'),
+    };
+
+    const formatInstant = (value: string): string => {
+      const instant = new Date(value);
+      if (Number.isNaN(instant.getTime())) return '';
+      try {
+        return new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }).format(instant);
+      } catch {
+        return '';
+      }
+    };
+
+    /**
+     * Show exactly the instants the server reported.
+     *
+     * A cancel replaces the creation instant with the closing one, because the
+     * row is gone by the time the receipt is written. A row with no instant is
+     * hidden rather than left blank, so the list never reads as a gap.
+     */
+    const paintInstants = (payload: CancelApiResponse): void => {
+      const reported = {
+        created: typeof payload.createdAt === 'string' ? formatInstant(payload.createdAt) : '',
+        expires: typeof payload.expiresAt === 'string' ? formatInstant(payload.expiresAt) : '',
+        closed: typeof payload.closedAt === 'string' ? formatInstant(payload.closedAt) : '',
+      };
+      for (const key of ['created', 'expires', 'closed'] as const) {
+        const row = instantRows[key];
+        const value = instantValues[key];
+        if (!row || !value) continue;
+        value.textContent = reported[key];
+        row.hidden = reported[key] === '';
+      }
+    };
 
     /** The label lives in its own span: the icon must survive label swaps. */
     const setButtonLabel = (button: HTMLButtonElement, text: string): void => {
@@ -196,6 +262,7 @@ const expiresAt = status?.expiresAt ? formatInstant(status.expiresAt, locale) : 
 
         if (response.ok && payload.ok === true && isControlState(payload.state)) {
           paint(payload.state);
+          paintInstants(payload);
           return;
         }
 

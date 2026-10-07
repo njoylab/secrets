@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { test, expect, type Page } from '@playwright/test';
 import pg from 'pg';
+import { encodeQr } from '../../src/lib/qr.ts';
 
 // The config validates the target before this destructive fixture can run.
 const pool = new pg.Pool({ connectionString: process.env.TEST_DATABASE_URL });
@@ -146,6 +147,142 @@ test('input limits, labels, keyboard access, languages and responsive layout', a
   await page.getByRole('link', { name: 'Inglese', exact: true }).click();
   await expect(page.locator('html')).toHaveAttribute('lang', 'en');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
+test('draws a scannable QR of the share link and clears it on reset', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#result-qr')).toBeHidden();
+
+  const { share } = await create(page, 'qr content');
+  const canvas = page.locator('#result-qr');
+  await expect(canvas).toBeVisible();
+  // The accessible name comes from the visible label, not a second one set in
+  // script, so a screen reader reads what the page shows.
+  await expect(canvas).toHaveAccessibleName('QR code');
+
+  // The page draws a whole number of pixels per module with a four module quiet
+  // zone, so the grid can be read back exactly and compared with what the encoder
+  // produces for this very link, content key included.
+  const symbol = encodeQr(share);
+  const quietZone = 4;
+  const modules = symbol.size + quietZone * 2;
+  const scale = Math.floor(232 / modules);
+  const extent = modules * scale;
+
+  const handle = await canvas.elementHandle();
+  const drawn = await page.evaluate(
+    ({ element: handle, size, pixels, quiet }) => {
+      const element = handle as HTMLCanvasElement;
+      const context = element.getContext('2d');
+      if (!context) throw new Error('no 2d context');
+      // Sample the centre of every module, and the four extreme pixels, which
+      // have to be light for a scanner to lock on.
+      const grid: boolean[][] = [];
+      for (let row = 0; row < size; row += 1) {
+        const line: boolean[] = [];
+        for (let column = 0; column < size; column += 1) {
+          const x = Math.floor((column + quiet) * pixels + pixels / 2);
+          const y = Math.floor((row + quiet) * pixels + pixels / 2);
+          line.push((context.getImageData(x, y, 1, 1).data[0] ?? 255) < 128);
+        }
+        grid.push(line);
+      }
+      const corners = [
+        context.getImageData(0, 0, 1, 1).data[0] ?? 255,
+        context.getImageData(element.width - 1, 0, 1, 1).data[0] ?? 255,
+        context.getImageData(0, element.height - 1, 1, 1).data[0] ?? 255,
+        context.getImageData(element.width - 1, element.height - 1, 1, 1).data[0] ?? 255,
+      ];
+      return { grid, corners, width: element.width, height: element.height };
+    },
+    { element: handle, size: symbol.size, pixels: scale, quiet: quietZone },
+  );
+
+  expect(drawn.width).toBe(extent);
+  expect(drawn.height).toBe(extent);
+  for (const corner of drawn.corners) expect(corner).toBeGreaterThan(200);
+
+  expect(drawn.grid.length).toBe(symbol.size);
+  for (let row = 0; row < symbol.size; row += 1) {
+    expect(drawn.grid[row]).toEqual([...(symbol.modules[row] ?? [])]);
+  }
+
+  // The three finder patterns are what a scanner locks on, so they are checked
+  // here independently of the encoder.
+  const finderAt = (row: number, column: number): boolean => {
+    const ring = '1111111';
+    const light = '1000001';
+    const core = '1011101';
+    const expected = [ring, light, core, core, core, light, ring];
+    const rows = drawn.grid.slice(row, row + 7).map((line) => line.slice(column, column + 7).map((d) => (d ? '1' : '0')).join(''));
+    return rows.every((line, index) => line === expected[index]);
+  };
+  const size = symbol.size;
+  expect(finderAt(0, 0)).toBe(true);
+  expect(finderAt(0, size - 7)).toBe(true);
+  expect(finderAt(size - 7, 0)).toBe(true);
+
+  await page.locator('#result-another').click();
+  await expect(canvas).toBeHidden();
+  // The pixels are cleared, not merely hidden: they hold the content key.
+  expect(await canvas.evaluate((element: HTMLCanvasElement) => element.width)).toBe(0);
+});
+
+test('control link reports creation, expiry and closing instants', async ({ page }) => {
+  const { control } = await create(page, 'instants');
+
+  await page.goto(control);
+  await expect(page.locator('#control-state-pending')).toBeVisible();
+  await expect(page.locator('#control-created')).not.toBeEmpty();
+  await expect(page.locator('#control-expiry')).not.toBeEmpty();
+  // Nothing has closed yet, so the closing row stays out of the layout.
+  await expect(page.locator('#control-closed-row')).toBeHidden();
+  // Each instant is a term and value pair inside one definition list, so the
+  // label travels with the value rather than being an unassociated paragraph.
+  const pairs = await page.locator('.meta-list > .meta:not([hidden])').evaluateAll((rows) =>
+    rows.map((row) => ({
+      term: row.querySelector('dt')?.textContent?.trim() ?? '',
+      value: row.querySelector('dd')?.textContent?.trim() ?? '',
+    })),
+  );
+  expect(pairs.map((pair) => pair.term)).toEqual(['Created', 'Expires']);
+  for (const pair of pairs) expect(pair.value).not.toBe('');
+
+  // Cancelling closes the secret, and the closing instant replaces the created one.
+  await page.locator('#control-cancel').click();
+  await expect(page.locator('#control-state-cancelled')).toBeVisible();
+  await expect(page.locator('#control-closed')).not.toBeEmpty();
+  // The creation instant went with the row, so its slot is hidden.
+  await expect(page.locator('#control-created-row')).toBeHidden();
+
+  // The control page never shows any of the secret text.
+  await expect(page.locator('body')).not.toContainText('instants');
+});
+
+test('the QR code and the control instants are localised in Italian', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('link', { name: 'Italian', exact: true }).click();
+  await expect(page.locator('html')).toHaveAttribute('lang', 'it');
+
+  await page.locator('#secret').fill('prova');
+  await page.locator('#create-submit').click();
+  await expect(page.locator('#result-panel')).toBeVisible();
+
+  await expect(page.locator('#result-qr-label')).toHaveText('Codice QR');
+  await expect(page.locator('#result-qr-hint')).toHaveText('Scansiona per aprire il link. Contiene la chiave.');
+  // The accessible name follows the visible label in this language too.
+  await expect(page.locator('#result-qr')).toHaveAccessibleName('Codice QR');
+
+  const control = await page.locator('#result-control-link').inputValue();
+  await page.goto(control);
+  // The labels are uppercased by CSS, so they are compared case insensitively.
+  const terms = async (): Promise<string[]> =>
+    (await page.locator('.meta-list > .meta:not([hidden]) dt').allInnerTexts()).map((text) => text.toLowerCase());
+  expect(await terms()).toEqual(['creato', 'scadenza']);
+
+  await page.locator('#control-cancel').click();
+  await expect(page.locator('#control-state-cancelled')).toBeVisible();
+  expect(await terms()).toEqual(['scadenza', 'chiuso']);
 });
 
 test('HTTP protection rejects cross-origin requests, caps creation quota and hardens readiness', async ({ request }) => {

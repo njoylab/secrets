@@ -26,6 +26,7 @@ const t = getDictionary(Astro.locals.locale);
     generatePasswordSalt,
     shareUrl,
   } from '../lib/content-crypto.ts';
+  import { encodeQr, type QrSymbol } from '../lib/qr.ts';
 
   interface CreateApiResponse {
     ok?: boolean;
@@ -86,6 +87,52 @@ const t = getDictionary(Astro.locals.locale);
     }
   }
 
+  /**
+   * Draw the share link as a QR code on the canvas.
+   *
+   * The link is composed here from the page origin and the token in the
+   * response, exactly as the text field above is, so no third party origin and
+   * no server round trip is involved. The canvas is sized in whole modules so
+   * the code stays square and crisp: the drawing area is the module grid plus a
+   * four module quiet zone, scaled by an integer.
+   *
+   * The accessible name comes from the visible label the markup already points
+   * at with `aria-labelledby`, so it is not set again here: two name sources
+   * would only invite them to drift apart.
+   */
+  function drawQrCode(canvas: HTMLCanvasElement, link: string): boolean {
+    let symbol: QrSymbol;
+    try {
+      symbol = encodeQr(link);
+    } catch {
+      // A link far longer than any real one cannot be encoded: leave the canvas
+      // hidden rather than showing a broken code.
+      return false;
+    }
+
+    const quietZone = 4;
+    const modules = symbol.size + quietZone * 2;
+    // Whole-number pixels per module, so the grid stays crisp at any size.
+    const scale = Math.max(1, Math.floor(232 / modules));
+    const extent = modules * scale;
+
+    canvas.width = extent;
+    canvas.height = extent;
+
+    const context = canvas.getContext('2d');
+    if (!context) return false;
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, extent, extent);
+    context.fillStyle = '#000000';
+    for (let row = 0; row < symbol.size; row += 1) {
+      for (let column = 0; column < symbol.size; column += 1) {
+        if (!symbol.isDark(row, column)) continue;
+        context.fillRect((column + quietZone) * scale, (row + quietZone) * scale, scale, scale);
+      }
+    }
+    return true;
+  }
+
   function formatInstant(value: string, locale: string): string {
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return value;
@@ -115,6 +162,8 @@ const t = getDictionary(Astro.locals.locale);
     const controlLink = byId<HTMLInputElement>('result-control-link');
     const controlCopy = byId<HTMLButtonElement>('result-control-copy');
     const passwordCopy = byId<HTMLButtonElement>('result-password-copy');
+    const qrField = byId<HTMLElement>('result-qr-field');
+    const qrCanvas = byId<HTMLCanvasElement>('result-qr');
 
     if (
       !form ||
@@ -134,7 +183,9 @@ const t = getDictionary(Astro.locals.locale);
       !resultCopy ||
       !controlLink ||
       !controlCopy ||
-      !passwordCopy
+      !passwordCopy ||
+      !qrField ||
+      !qrCanvas
     ) {
       return;
     }
@@ -243,7 +294,8 @@ const t = getDictionary(Astro.locals.locale);
           ? controlUrl(window.location.origin, payload.controlToken)
           : null;
       if (!share || !control) return false;
-      shareRow.field.value = `${share}#${keyFragment}`;
+      const shareLink = `${share}#${keyFragment}`;
+      shareRow.field.value = shareLink;
       controlRow.field.value = control;
       expiryPreset.textContent = expiryLabels[preset] ?? '';
       expiryValue.textContent = formatInstant(payload.expiresAt ?? '', expiryValue.dataset.locale ?? 'en');
@@ -251,6 +303,11 @@ const t = getDictionary(Astro.locals.locale);
       // this page: it never returns in a response body and never enters a link.
       passwordEcho.value = password.value;
       passwordField.hidden = password.value.length === 0;
+      // The code carries the key, so it is drawn only once the link exists and
+      // is torn down with the rest of the result.
+      const drawn = drawQrCode(qrCanvas, shareLink);
+      qrCanvas.hidden = !drawn;
+      qrField.hidden = !drawn;
       resultStatus.textContent = '';
       resultStatus.classList.remove('is-error');
       // The plaintext has left the page: drop it from the DOM as well.
@@ -363,6 +420,12 @@ const t = getDictionary(Astro.locals.locale);
       panel.hidden = true;
       form.hidden = false;
       form.reset();
+      // The code holds the content key in pixels, so it is cleared before the
+      // next secret is on screen rather than left behind a hidden panel.
+      qrCanvas.hidden = true;
+      qrField.hidden = true;
+      qrCanvas.width = 0;
+      qrCanvas.height = 0;
       // The echo sits outside the form, so form.reset() does not reach it: the
       // password must not survive in the DOM once the next secret is on screen.
       passwordEcho.value = '';
