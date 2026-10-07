@@ -79,8 +79,10 @@ const presence = await peekSecretPresence(token);
             <span class="btn-label">{t.secret.copy}</span>
           </button>
           <p class="status" id="secret-status" role="status" aria-live="polite"></p>
-          <p class="panel-title">{t.secret.consumed}</p>
-          <p class="note">{t.secret.consumedHint}</p>
+          {/* Read and spent, not an error: the copy of the dead end would read as a
+              failure right under a secret the reader is looking at. */}
+          <p class="panel-title">{t.secret.spentTitle}</p>
+          <p class="note">{t.secret.spentHint}</p>
         </Panel>
 
         <Notice

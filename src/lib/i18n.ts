@@ -88,6 +88,8 @@ export type Dictionary = {
     copyFailed: string;
     consumed: string;
     consumedHint: string;
+    spentTitle: string;
+    spentHint: string;
   };
   errors: {
     payloadRequired: string;
@@ -195,6 +197,8 @@ const it: Dictionary = {
     copyFailed: 'Copia non riuscita',
     consumed: 'Segreto non disponibile',
     consumedHint: 'Questo link è stato già letto o è scaduto.',
+    spentTitle: 'Link esaurito',
+    spentHint: 'Il segreto è stato letto e il link non si riapre più.',
   },
 
   errors: {
@@ -300,6 +304,8 @@ const en: Dictionary = {
     copyFailed: 'Copy failed',
     consumed: 'Secret unavailable',
     consumedHint: 'This link was already read or has expired.',
+    spentTitle: 'Link spent',
+    spentHint: 'The secret was read and the link can no longer be reopened.',
   },
 
   errors: {
