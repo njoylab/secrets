@@ -183,7 +183,7 @@ const privacyIt: LegalDocument = {
       blocks: [
         {
           kind: 'p',
-          text: 'L’applicazione non registra contenuti, password, token o corpi delle richieste. Proxy e hosting possono registrare IP, orari, percorsi richiesti e browser; i percorsi possono contenere i token, ma non la chiave dopo #. I server sono ospitati su il hosting provider, in a country the European Commission recognises as providing adequate data protection. Cloudflare gestisce il DNS e fa da proxy al traffico web, trattando indirizzi IP e metadati delle richieste. Questi fornitori possono trattare i dati tecnici necessari ai rispettivi servizi. Eventuali ulteriori trasferimenti fuori dallo Spazio economico europeo richiedono le garanzie previste dal GDPR; puoi chiedere dettagli a [[contact]].',
+          text: 'L’applicazione non registra contenuti, password, token o corpi delle richieste. Proxy e hosting possono registrare IP, orari, percorsi richiesti e browser; i percorsi possono contenere i token, ma non la chiave dopo #. I server sono ospitati dal provider indicato nella documentazione del servizio, in un Paese riconosciuto dalla Commissione europea come adeguato per la protezione dei dati. Cloudflare gestisce il DNS e fa da proxy al traffico web, trattando indirizzi IP e metadati delle richieste. Questi fornitori possono trattare i dati tecnici necessari ai rispettivi servizi. Eventuali ulteriori trasferimenti fuori dallo Spazio economico europeo richiedono le garanzie previste dal GDPR; puoi chiedere dettagli a [[contact]].',
         },
         {
           kind: 'p',
@@ -270,7 +270,7 @@ const privacyEn: LegalDocument = {
       blocks: [
         {
           kind: 'p',
-          text: 'The application does not log content, passwords, tokens or request bodies. A proxy and hosting provider may log IP addresses, times, requested paths and browsers; paths may include tokens, but never the key after #. The servers are hosted on the hosting provider, which the European Commission recognises as providing adequate data protection. Cloudflare manages DNS and proxies web traffic, processing IP addresses and request metadata. These providers may process the technical data needed for their respective services. Any further transfers outside the European Economic Area require GDPR safeguards; contact [[contact]] for details.',
+          text: 'The application does not log content, passwords, tokens or request bodies. A proxy and hosting provider may log IP addresses, times, requested paths and browsers; paths may include tokens, but never the key after #. The servers are hosted with the provider named in the service documentation, in a country the European Commission recognises as providing adequate data protection. Cloudflare manages DNS and proxies web traffic, processing IP addresses and request metadata. These providers may process the technical data needed for their respective services. Any further transfers outside the European Economic Area require GDPR safeguards; contact [[contact]] for details.',
         },
         {
           kind: 'p',
