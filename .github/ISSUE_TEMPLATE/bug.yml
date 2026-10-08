@@ -1,0 +1,58 @@
+name: Bug
+description: Something behaves differently from what the README documents.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Never paste a secret, a password, a token or a complete share link.
+        A consumed secret cannot be recovered by anyone.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The observed behaviour, and what you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open /s/...
+        2. Submit the form with ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: The output of `git rev-parse --short HEAD`, or the deployed release.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: browser
+    attributes:
+      label: Browser and OS
+    options:
+      - Chromium on Linux
+      - Chromium on macOS
+      - Chromium on Windows
+      - Firefox on Linux
+      - Firefox on macOS
+      - Firefox on Windows
+      - Safari on macOS or iOS
+      - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Server or browser logs
+      description: Only if they contain no tokens, bodies or URLs with fragments.

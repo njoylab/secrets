@@ -23,6 +23,11 @@ import { DEFAULT_LOCALE, type Locale } from './i18n.ts';
 /**
  * Identity of the party behind the service, as published on the operator's own
  * site. Changing the controller means changing only this object.
+ *
+ * The values here are placeholders. Replace every field, and the operator name
+ * and VAT number written into the documents below, before deploying: a privacy
+ * policy that names the wrong controller is worse than no policy, and the test
+ * suite fails if the prose and this object disagree.
  */
 export const OPERATOR = {
   name: 'Example Operator S.r.l.',

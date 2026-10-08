@@ -1,7 +1,8 @@
 {
   "name": "secrets",
   "version": "0.1.0",
-  "private": true,
+  "description": "One-time secret sharing with browser-side encryption, control links, and cancellation",
+  "license": "MIT",
   "type": "module",
   "engines": {
     "node": ">=22.12"

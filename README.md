@@ -115,6 +115,7 @@ once. With a password, the link alone is not enough.
 | `COOKIE_SECURE` | no | `true` when `NODE_ENV=production`, otherwise `false` | `Secure` attribute on the locale cookie. |
 | `CLEANUP_KEEP_COUNTER_SECONDS` | no | `3600` | Read only by `npm run cleanup`: age after which idle rate limit counters are deleted. |
 | `REQUEST_METRICS` | no | `false` | Set to `true` for JSON route/status/duration metrics. Never includes request URLs, bodies, tokens, IPs or raw errors. |
+| `MONITOR_ORIGIN` | no | — | Required by `npm run check:live` only: the HTTPS origin of the deployment to verify. |
 
 ### Hostnames and client addresses
 
@@ -230,7 +231,7 @@ may return and fails if anything else appears.
   PM2, container env) rather than in a file, and keep `.env` out of the deployment.
 - Start with `npm start` so migrations complete before switching traffic. `npm run migrate` remains available for an explicit migration step.
 - Schedule `npm run cleanup`.
-- The adapter listens on `HOST`/`PORT` (default port `8080`). `HOST` defaults to
+- The adapter listens on `HOST`/`PORT` (default port `4321`). `HOST` defaults to
   `127.0.0.1`, so the process is reachable only through a proxy on the same
   machine; set it explicitly only when a proxy has to reach it on another
   interface. Keep it on a private interface and let the proxy be the only public
@@ -296,33 +297,32 @@ Inline links are written `[[token]]` and resolved by `resolveLegalText`, which
 returns text and links as separate parts so the page renders prose as text. The
 allowed tokens and their labels are in `LEGAL_LINKS`; `tests/legal.test.ts` fails on
 an unknown or unused token. The operator identity — name, VAT number, contact
-address and the umbrella documents on the operator's main site — is the `OPERATOR`
-constant at the top of the same file.
+address and the umbrella documents of the main site — is the `OPERATOR` constant
+at the top of the same file. Replace it before deploying under a different
+identity: the published documents state the controller, and they must name
+whoever actually runs the service.
 
 The documents describe what the code does: hashed tokens, the browser-side
 ciphertext, the retention of `scripts/cleanup.mjs`, and the two residual limits
 below. Where the implementation cannot back a promise they say so, so a revision
-must keep matching the code rather than the intention.
+must keep matching the code rather than the intention. The bundled text also
+describes the deployment it was written against — its host, its proxy and its
+providers. A deployment on a different stack must revise those paragraphs before
+the documents describe anything true.
 
 ### Infrastructure retention policy
 
-The chosen target is a maximum of **7 days** for technical logs and any database
-backups controlled by Example Operator S.r.l.. This is a policy to configure and verify, not a
-retention guarantee enforced by the application. No infrastructure setting has
-been changed or verified in this repository.
+Retention of technical logs and backups is a property of the infrastructure, not
+of this application: nothing here enforces it. If you publish a limit, such as a
+maximum of 7 days, then verify the settings that produce it.
 
 - Configure log rotation and deletion by age; redact share and control tokens
   from request paths, and never log request bodies or link fragments.
 - If backups are enabled, expire backup copies, snapshots and archived WAL
-  within the same 7-day recovery window, including exported copies.
+  within the same recovery window, including exported copies.
 - Record the effective settings and deletion checks before describing the limit
   as active in the privacy policy. Retention of provider-controlled data must be
   checked separately in the applicable contracts and policies.
-
-Turnstile is documented as a possible future addition and is not integrated.
-Before activation, verify the deployed cookie settings (including pre-clearance),
-provider transfer safeguards and retention, then update the notice to describe
-actual use. The support mailbox provider and message retention remain unverified.
 
 ## Local test database
 
@@ -347,16 +347,10 @@ The API tests require this database too: they execute real route handlers and
 persist real fixtures. Even pure crypto files currently run the shared database
 setup. Use the isolated database for every invocation of this Vitest config.
 
-## Release checks and the platform operations
+## Release checks
 
-the platform manages the deployment on the hosting provider. The public instance
-is a pre-launch environment. CI verifies typecheck, PostgreSQL tests, build,
-browser flows and the production dependency audit.
-The first GitHub attempt could not acquire a hosted runner; local checks are not
-proof of a CI-gated release. The current Git webhook can deploy a push before CI finishes. Deploy
-only a verified revision, or configure a CI gate before relying on automatic releases.
-
-Browser tests use the built Node server on loopback with Chromium, Firefox and
+CI verifies typecheck, PostgreSQL tests, build, browser flows and the production
+dependency audit. Browser tests use the built Node server on loopback with Chromium, Firefox and
 WebKit, on desktop and mobile. They truncate fixtures and refuse targets other
 than a local `*_test` database. Apply migrations to that isolated database first:
 
@@ -372,74 +366,85 @@ timeouts are 30 seconds. Application SQL statements time out after 10 seconds,
 lock waits after 5 seconds, and cleanup statements after 60 seconds. Migrations
 serialize with an advisory lock. `npm start` migrates before accepting traffic.
 
-Configure these settings together during the approved the platform release:
+## Operating the deployment
 
-- Build with `NODE_VERSION=24` and `ALLOWED_HOSTS=secrets.example.com`.
-  Use `npm start`, replacing `node server.mjs` and the post-deploy migration hook.
-  Ensure build dependencies are installed. Bind to the private network for the
-  the platform proxy; do not expose the app port publicly. Verify `TRUSTED_PROXIES`
-  against the actual controlled addresses and the full Cloudflare forwarding chain.
-- Health check: HTTP GET `/api/health`, port 3000 for this resource, expected 200,
-  interval 60s, timeout 15s, three retries, start period 30s. The endpoint checks
-  the database/schema without consuming secrets and returns only `ok`; failure
-  returns 503. Bound public polling at the proxy to protect the connection pool.
-- Schedule `node scripts/cleanup.mjs` hourly in the app working directory with
-  its runtime environment. Monitor failures and missed runs, deployment errors,
-  unhealthy resources and failed/missing backups through the existing the platform
-  notification channel. Verify delivery; use a two-day missing-backup alert for
-  a daily schedule.
-- Preserve `no-store`, `no-referrer`, `DENY` and the app CSP through the proxy
-  and Cloudflare. Set HSTS at the HTTPS edge and bound bodies before forwarding.
-  Add measured edge rate limits: PostgreSQL quotas do not stop volumetric attacks.
-- Redact share/control path tokens from proxy/CDN logs; never log request bodies.
-  Verify age-based log deletion within seven days. `REQUEST_METRICS=true` emits
+The items below are the checks to configure for your own platform. Nothing here
+is specific to one host: a reverse proxy, a process manager and a scheduler are
+enough.
+
+- Build with a Node version matching `engines.node`, and export
+  `ALLOWED_HOSTS=<your hostname>` in the build environment, since
+  `npm run build` does not load `.env`. Use `npm start`, not `node server.mjs`
+  and not a post-deploy migration hook, so migrations finish before traffic
+  arrives. Bind `HOST` to the private interface the proxy reaches and never
+  expose the app port publicly. Verify `TRUSTED_PROXIES` against the addresses
+  you actually control, including every hop of the forwarding chain.
+- Health check: HTTP GET `/api/health`, expected 200, with an interval of about
+  60s, a timeout of 15s, three retries and a start period long enough for the
+  first migration. The endpoint checks the database and schema without consuming
+  secrets and returns only `ok`; failure returns 503. Bound public polling at
+  the proxy so health checks cannot exhaust the connection pool.
+- Schedule `npm run cleanup` (hourly is a reasonable default) in the app working
+  directory with its runtime environment. Monitor cleanup failures, missed runs,
+  deployment errors, unhealthy resources and failed or missing backups, and
+  verify that notifications are actually delivered. Alert on a missed backup
+  after roughly two days for a daily schedule.
+- Preserve `no-store`, `no-referrer`, `DENY` and the application CSP through the
+  proxy and any CDN in front of it. Send HSTS from the HTTPS edge and bound
+  request bodies before forwarding. Add measured edge rate limits: the
+  PostgreSQL quotas do not stop volumetric attacks.
+- Redact share and control path tokens from proxy and CDN logs; never log
+  request bodies. Verify age-based log deletion. `REQUEST_METRICS=true` emits
   only route templates, method, status and duration, without raw errors or IPs.
-- Verify backup scope, successful execution and recovery. The seven-day target
-  requires checking local/S3 copies, exported files, VM snapshots and provider
-  retention separately. Job-based retention does not prove deletion when jobs
-  stop. Preserve the runtime encryption key outside the database and its backups.
+- Bound CPU and memory for the service. Verify that backups cover the right
+  scope, actually run, and can be restored. A job-based retention setting does
+  not prove deletion when the job stops. Keep `SECRET_ENCRYPTION_KEY` outside
+  the database and outside its backups.
 
-`npm run check:live` checks the public homepage headers and readiness through
-Cloudflare, visiting no secret URLs and performing no writes. Set
-`MONITOR_ORIGIN` only to another HTTPS origin if needed. Failures produce check
-names and a nonzero exit status. Correct local headers are not public proof.
+`npm run check:live` verifies the public homepage headers and readiness of a
+deployed instance, visiting no share or control URLs and performing no writes.
+It requires `MONITOR_ORIGIN` to be set to the HTTPS origin under test. Failures
+produce check names and a nonzero exit status. Correct local headers are not
+public proof: run it against the deployed origin.
 
 **Recovery:** an old database backup can resurrect consumed secrets. Restore
 only offline. Without a complete, independently verified record of subsequent
-consumptions/cancellations, discard restored pending payloads before reopening
-traffic. This also invalidates unread links. Require explicit operator approval
-for that destructive recovery step. Never restore the database just to roll back
-code; retain the previous artifact/config and use forward-compatible migrations.
-Changing `SECRET_ENCRYPTION_KEY` invalidates stored payloads.
+consumptions and cancellations, discard restored pending payloads before
+reopening traffic; this also invalidates unread links. Require explicit operator
+approval for that destructive step. Never restore the database just to roll
+back code: retain the previous artifact and configuration and use
+forward-compatible migrations. Changing `SECRET_ENCRYPTION_KEY` invalidates
+every stored payload.
 
-Inspection on 5 October 2026 found no application health check or scheduled
-cleanup, unrestricted CPU/memory, and migrations configured after deploy. The
-shared PostgreSQL resource found in the platform has daily all-databases backups with
-successful executions, local retention 3 days, S3 enabled with retention 14 days,
-and missing-backup alerts disabled. Confirm it hosts this app before changing
-scope; its shared retention affects other databases and exceeds the seven-day
-policy target. The subsequent approved release enabled the health check and
-hourly cleanup, and moved migrations into `npm start` before accepting traffic.
-The observed runtime was Node 22.23.3, which meets the minimum of 22.12.
-Cleanup execution and backup ownership still require verification.
+## Limitations
 
-Public HTTP redirected to HTTPS and cache was disabled, but response headers
-were `Referrer-Policy: same-origin`, `X-Frame-Options: SAMEORIGIN`, with no HSTS
-or CSP. The approved release now passes public readiness and header checks,
-including the application CSP. A Cloudflare response-header rule scoped to
-`secrets.example.com` sets `no-referrer`, `DENY` and HSTS (`max-age=15552000`).
+These are the honest limits of the current implementation, not a roadmap:
 
-Local proof: 393 PostgreSQL/unit tests and 40 browser cases passed, with clean
-build/typecheck and no known npm vulnerabilities. An isolated restore drill
-reproduced resurrection and verified offline payload removal prevents it. Outage
-checks returned safe 503 responses and recovered without losing a pending fixture;
-chunked body limits, malformed-host rejection and token-free metrics/errors
-passed. A 100-request local readiness burst had p95 about 40 ms, not a production
-capacity estimate. Actual the platform restore, notification delivery, log retention
-and edge rate limits remain unverified. The password protocol rejects direct
-API consumption without the proof released by the password verifier. Unsupported
-password formats are rejected without consumption.
+- A control link reports state only. If you lose the share link, the content is
+  not recoverable by anyone, including the operator.
+- Consumption happens before the browser decrypts. A lost response leaves the
+  secret marked read with no way to re-read it.
+- Deletion does not reach the WAL, free space maps or backups already taken.
+  Erasure from backups depends on retention policy outside this repository.
+- There are no accounts, no key escrow and no audit log of who read a secret:
+  receipts record that a read happened and when, not who did it.
 
-References: [the platform backups](https://example.com/docs/databases/backups),
-[proxy middleware](https://example.com/docs/core/networking/proxy/traefik/custom-middlewares),
-[Node](https://railpack.com/languages/node/).
+## Security reporting
+
+Report a suspected vulnerability privately as described in `.github/SECURITY.md`
+rather than in a public issue, and include reproduction steps. Never include
+real secrets, passwords or complete share links in a report.
+
+## Contributing
+
+Small, reviewable pull requests against `main`. Match the existing style: TypeScript
+strict, English code comments, no runtime dependency added without a stated need,
+and no change that breaks an invariant listed in "Security notes" — in particular
+never let a `GET` consume a secret and never send the fragment key to the server.
+Update `README.md` and the legal documents in `src/lib/legal.ts` when behaviour
+changes; `npm run typecheck`, `npm test`, `npm run build` and `npm run test:browser`
+must pass, and all of them run in CI.
+
+## License
+
+MIT. See `LICENSE`.

@@ -1,5 +1,7 @@
 /** Read-only deployment checks. Never visit share or control URLs. */
-const origin = new URL(process.env.MONITOR_ORIGIN ?? 'https://secrets.example.com');
+const monitorOrigin = process.env.MONITOR_ORIGIN;
+if (!monitorOrigin) throw new Error('MONITOR_ORIGIN is required: set it to the HTTPS origin to verify');
+const origin = new URL(monitorOrigin);
 if (origin.protocol !== 'https:' || origin.pathname !== '/' || origin.search || origin.hash ||
     origin.username || origin.password) {
   throw new Error('MONITOR_ORIGIN must be an HTTPS origin');
