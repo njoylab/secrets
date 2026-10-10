@@ -48,13 +48,15 @@ describe('legal documents', () => {
     }
   });
 
-  it('reaches the controller in every document', () => {
+  it('reaches the controller in every document, without a VAT number', () => {
+    // The name and the contact address identify the controller under Articles
+    // 13-14 GDPR. No VAT number is published, so none may leak into the prose.
     for (const kind of KINDS) {
       for (const locale of LOCALES) {
         const text = rendered(getLegalDocument(kind, locale), locale);
         expect(text, `${kind}:${locale}`).toContain(OPERATOR.name);
-        expect(text, `${kind}:${locale}`).toContain(OPERATOR.vatId);
         expect(text, `${kind}:${locale}`).toContain(OPERATOR.contactEmail);
+        expect(text, `${kind}:${locale}`).not.toMatch(/P\.IVA|\bVAT\b/);
       }
     }
   });

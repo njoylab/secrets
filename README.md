@@ -296,11 +296,16 @@ diff in one place, and nothing legal is written inside an `.astro` file.
 Inline links are written `[[token]]` and resolved by `resolveLegalText`, which
 returns text and links as separate parts so the page renders prose as text. The
 allowed tokens and their labels are in `LEGAL_LINKS`; `tests/legal.test.ts` fails on
-an unknown or unused token. The operator identity — name, VAT number, contact
-address and the umbrella documents of the main site — is the `OPERATOR` constant
-at the top of the same file. Replace it before deploying under a different
-identity: the published documents state the controller, and they must name
-whoever actually runs the service.
+an unknown or unused token. The operator identity — name, contact address and the
+umbrella documents of the main site — is the `OPERATOR` constant at the top of the
+same file. It ships as a placeholder and the operator name is also written into the
+prose, so replace both before deploying under your own identity: the published
+documents state the controller, and they must name whoever actually runs the
+service. `tests/legal.test.ts` fails when the prose and the constant disagree.
+
+No VAT number is published. Articles 13-14 GDPR require the controller's identity
+and contact details, not a registration number, and the test asserts that none
+appears in the prose.
 
 The documents describe what the code does: hashed tokens, the browser-side
 ciphertext, the retention of `scripts/cleanup.mjs`, and the two residual limits

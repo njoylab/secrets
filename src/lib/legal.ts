@@ -25,14 +25,17 @@ import { DEFAULT_LOCALE, type Locale } from './i18n.ts';
  * site. Changing the controller means changing only this object.
  *
  * The values here are placeholders. Replace every field, and the operator name
- * and VAT number written into the documents below, before deploying: a privacy
- * policy that names the wrong controller is worse than no policy, and the test
- * suite fails if the prose and this object disagree.
+ * written into the documents below, before deploying: a privacy policy that
+ * names the wrong controller is worse than no policy, and the test suite fails
+ * if the prose and this object disagree.
+ *
+ * No VAT number is published. It is optional for this kind of notice, which the
+ * controller identification in Articles 13-14 GDPR does not require, and it is
+ * public registry data in any case. The name and the contact address are what
+ * identify the controller here.
  */
 export const OPERATOR = {
   name: 'Example Operator S.r.l.',
-  /** VAT identification number. */
-  vatId: 'IT00000000000',
   contactEmail: 'privacy@example.com',
   /** General documents of the main site, which cover the site rather than this tool. */
   sitePrivacyUrl: 'https://example.com/privacy',
@@ -130,7 +133,7 @@ const privacyIt: LegalDocument = {
       blocks: [
         {
           kind: 'p',
-          text: "Il titolare è Example Operator S.r.l., P.IVA IT00000000000. Contatti: [[contact]]. Trattiamo i dati per fornire il servizio e prevenire abusi, sulla base del legittimo interesse (art. 6.1.f GDPR). Non servono account e non facciamo marketing, profilazione o decisioni automatizzate.",
+          text: "Il titolare è Example Operator S.r.l. Contatti: [[contact]]. Trattiamo i dati per fornire il servizio e prevenire abusi, sulla base del legittimo interesse (art. 6.1.f GDPR). Non servono account e non facciamo marketing, profilazione o decisioni automatizzate.",
         },
       ],
     },
@@ -217,7 +220,7 @@ const privacyEn: LegalDocument = {
       blocks: [
         {
           kind: 'p',
-          text: 'The controller is Example Operator S.r.l., VAT IT00000000000. Contact: [[contact]]. We process data to provide the service and prevent abuse, based on legitimate interest (Article 6(1)(f) GDPR). No account is required. We do not use data for marketing, profiling or automated decision-making.',
+          text: 'The controller is Example Operator S.r.l. Contact: [[contact]]. We process data to provide the service and prevent abuse, based on legitimate interest (Article 6(1)(f) GDPR). No account is required. We do not use data for marketing, profiling or automated decision-making.',
         },
       ],
     },
@@ -304,7 +307,7 @@ const termsIt: LegalDocument = {
       blocks: [
         {
           kind: 'p',
-          text: 'secrets è gestito da Example Operator S.r.l., P.IVA IT00000000000: [[contact]]. Usandolo accetti queste condizioni. Puoi condividere testi fino a 50 KiB con un link monouso, una scadenza da un’ora a 30 giorni e una password opzionale. Il link di controllo mostra lo stato e permette di annullare il segreto. I contenuti restano tuoi. Il servizio non è destinato a minori.',
+          text: 'secrets è gestito da Example Operator S.r.l.: [[contact]]. Usandolo accetti queste condizioni. Puoi condividere testi fino a 50 KiB con un link monouso, una scadenza da un’ora a 30 giorni e una password opzionale. Il link di controllo mostra lo stato e permette di annullare il segreto. I contenuti restano tuoi. Il servizio non è destinato a minori.',
         },
       ],
     },
@@ -370,7 +373,7 @@ const termsEn: LegalDocument = {
       blocks: [
         {
           kind: 'p',
-          text: 'secrets is operated by Example Operator S.r.l., VAT IT00000000000: [[contact]]. By using it you accept these terms. You can share text up to 50 KiB through a one-time link, with an expiry from one hour to 30 days and an optional password. The control link shows the status and lets you cancel the secret. Your content remains yours. The service is not intended for minors.',
+          text: 'secrets is operated by Example Operator S.r.l.: [[contact]]. By using it you accept these terms. You can share text up to 50 KiB through a one-time link, with an expiry from one hour to 30 days and an optional password. The control link shows the status and lets you cancel the secret. Your content remains yours. The service is not intended for minors.',
         },
       ],
     },
