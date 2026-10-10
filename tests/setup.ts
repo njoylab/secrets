@@ -64,6 +64,7 @@ beforeAll(async () => {
   // Heredity from a developer shell must not change what the assertions mean.
   delete process.env.TRUSTED_PROXIES;
   delete process.env.ALLOWED_ORIGINS;
+  delete process.env.SOURCE_URL;
 
   await resetEnv();
 });

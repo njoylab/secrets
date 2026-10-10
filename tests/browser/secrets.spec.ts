@@ -149,6 +149,19 @@ test('input limits, labels, keyboard access, languages and responsive layout', a
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
 
+test('the footer links to the public repository in both languages', async ({ page }) => {
+  await page.goto('/');
+  const source = page.getByRole('link', { name: 'Source code', exact: true });
+  await expect(source).toBeVisible();
+  // The link leaves the origin, so it must not hand the opener over as well.
+  await expect(source).toHaveAttribute('rel', /noopener/);
+  await expect(source).toHaveAttribute('href', /^https:\/\//);
+
+  await page.getByRole('link', { name: 'Italian', exact: true }).click();
+  await expect(page.locator('html')).toHaveAttribute('lang', 'it');
+  await expect(page.getByRole('link', { name: 'Codice sorgente', exact: true })).toBeVisible();
+});
+
 test('draws a scannable QR of the share link and clears it on reset', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('#result-qr')).toBeHidden();

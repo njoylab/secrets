@@ -118,6 +118,8 @@ export type Dictionary = {
     linksLabel: string;
     privacy: string;
     terms: string;
+    source: string;
+    sourceLabel: string;
   };
 };
 
@@ -232,6 +234,8 @@ const it: Dictionary = {
     linksLabel: 'Documenti legali',
     privacy: 'Informativa privacy',
     terms: 'Condizioni d\'uso',
+    source: 'Codice sorgente',
+    sourceLabel: 'Codice sorgente su GitHub',
   },
 };
 
@@ -343,6 +347,8 @@ const en: Dictionary = {
     linksLabel: 'Legal documents',
     privacy: 'Privacy policy',
     terms: 'Terms of use',
+    source: 'Source code',
+    sourceLabel: 'Source code on GitHub',
   },
 };
 

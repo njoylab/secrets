@@ -20,6 +20,8 @@ export interface AppConfig {
   readonly createRateLimit: RateLimitRule;
   readonly revealRateLimit: RateLimitRule;
   readonly secureCookies: boolean;
+  /** Public repository linked from the footer. Empty means "show no link". */
+  readonly sourceUrl: string;
 }
 
 export class ConfigError extends Error {}
@@ -50,6 +52,25 @@ function readList(raw: string | undefined): readonly string[] {
     .split(',')
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
+}
+
+/**
+ * The footer link, validated because it is rendered as an href: only an absolute
+ * HTTPS URL with no credentials, so a misconfiguration cannot emit a
+ * `javascript:` or `data:` URL into every page.
+ */
+function readSourceUrl(raw: string | undefined): string {
+  if (raw === undefined || raw.trim() === '') return '';
+  let parsed: URL;
+  try {
+    parsed = new URL(raw.trim());
+  } catch {
+    throw new ConfigError('SOURCE_URL must be an absolute URL');
+  }
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password) {
+    throw new ConfigError('SOURCE_URL must be an HTTPS URL without credentials');
+  }
+  return parsed.toString();
 }
 
 function parseEncryptionKey(raw: string | undefined): Buffer {
@@ -100,6 +121,7 @@ export function getConfig(): AppConfig {
       windowSeconds: readPositiveInt(process.env.RATE_LIMIT_REVEAL_WINDOW_SECONDS, 300),
     },
     secureCookies,
+    sourceUrl: readSourceUrl(process.env.SOURCE_URL),
   };
   return cached;
 }

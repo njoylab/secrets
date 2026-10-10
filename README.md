@@ -115,6 +115,7 @@ once. With a password, the link alone is not enough.
 | `COOKIE_SECURE` | no | `true` when `NODE_ENV=production`, otherwise `false` | `Secure` attribute on the locale cookie. |
 | `CLEANUP_KEEP_COUNTER_SECONDS` | no | `3600` | Read only by `npm run cleanup`: age after which idle rate limit counters are deleted. |
 | `REQUEST_METRICS` | no | `false` | Set to `true` for JSON route/status/duration metrics. Never includes request URLs, bodies, tokens, IPs or raw errors. |
+| `SOURCE_URL` | no | empty (no link) | Absolute HTTPS URL of the public repository, linked from the footer. Invalid values are rejected at startup rather than rendered. |
 | `MONITOR_ORIGIN` | no | — | Required by `npm run check:live` only: the HTTPS origin of the deployment to verify. |
 
 ### Hostnames and client addresses

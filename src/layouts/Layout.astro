@@ -1,6 +1,7 @@
 ---
 import '../styles/global.css';
 import { getDictionary } from '../lib/i18n.ts';
+import { getConfig } from '../lib/env.ts';
 import LanguageSwitcher from '../components/LanguageSwitcher.astro';
 
 interface Props {
@@ -12,6 +13,7 @@ interface Props {
 const { title, description } = Astro.props;
 const locale = Astro.locals.locale;
 const t = getDictionary(locale);
+const sourceUrl = getConfig().sourceUrl;
 // Language links return to the current path, query string included.
 const next = `${Astro.url.pathname}${Astro.url.search}`;
 ---
@@ -43,6 +45,9 @@ const next = `${Astro.url.pathname}${Astro.url.search}`;
         <nav class="site-footer-nav" aria-label={t.footer.linksLabel}>
           <a href="/privacy">{t.footer.privacy}</a>
           <a href="/terms">{t.footer.terms}</a>
+          {sourceUrl && (
+            <a href={sourceUrl} title={t.footer.sourceLabel} rel="noopener noreferrer">{t.footer.source}</a>
+          )}
         </nav>
       </footer>
     </div>

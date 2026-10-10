@@ -43,6 +43,8 @@ export default defineConfig({
       RATE_LIMIT_CREATE_MAX: '20', RATE_LIMIT_CREATE_WINDOW_SECONDS: '3600',
       RATE_LIMIT_REVEAL_MAX: '30', RATE_LIMIT_REVEAL_WINDOW_SECONDS: '300',
       REQUEST_METRICS: 'false',
+      // Set so the browser suite can assert the footer link that production shows.
+      SOURCE_URL: 'https://github.com/example/secrets',
     },
   },
 });
