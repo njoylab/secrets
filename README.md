@@ -355,9 +355,10 @@ setup. Use the isolated database for every invocation of this Vitest config.
 ## Release checks
 
 CI verifies typecheck, PostgreSQL tests, build, browser flows and the production
-dependency audit. Browser tests use the built Node server on loopback with Chromium, Firefox and
-WebKit, on desktop and mobile. They truncate fixtures and refuse targets other
-than a local `*_test` database. Apply migrations to that isolated database first:
+dependency audit. Browser tests use the built Node server on loopback with
+Chromium, Firefox and WebKit, on desktop and mobile. They truncate fixtures and
+refuse targets other than a local `*_test` database. Apply migrations to that
+isolated database first:
 
 ```sh
 ALLOWED_HOSTS=localhost,127.0.0.1 npm run build

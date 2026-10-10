@@ -42,7 +42,7 @@ export const OPERATOR = {
   siteTermsUrl: 'https://example.com/terms',
 } as const;
 
-export type LegalLinkKey = 'privacy' | 'terms' | 'sitePrivacy' | 'siteTerms' | 'contact' | 'turnstilePrivacy' | 'cloudflareCookies';
+export type LegalLinkKey = 'privacy' | 'terms' | 'sitePrivacy' | 'siteTerms' | 'contact' | 'turnstilePrivacy';
 
 export interface LegalLinkPart {
   readonly href: string;
@@ -57,7 +57,6 @@ export const LEGAL_LINKS: Readonly<Record<LegalLinkKey, LegalLinkPart>> = {
   siteTerms: { href: OPERATOR.siteTermsUrl, label: OPERATOR.siteTermsUrl },
   contact: { href: `mailto:${OPERATOR.contactEmail}`, label: OPERATOR.contactEmail },
   turnstilePrivacy: { href: 'https://www.cloudflare.com/turnstile-privacy-policy/', label: 'informativa Turnstile' },
-  cloudflareCookies: { href: 'https://developers.cloudflare.com/fundamentals/reference/policies-compliances/cloudflare-cookies/', label: 'cookie Cloudflare' },
 };
 
 /** Localized labels for links whose wording differs between languages. */
@@ -65,7 +64,6 @@ const LINK_LABELS_EN: Readonly<Partial<Record<LegalLinkKey, string>>> = {
   privacy: 'privacy policy',
   terms: 'terms of use',
   turnstilePrivacy: 'Turnstile privacy notice',
-  cloudflareCookies: 'Cloudflare cookies',
 };
 
 /** The words a token stands for in a sentence. */
@@ -146,7 +144,7 @@ const privacyIt: LegalDocument = {
             'Contenuto cifrato, impronte dei token, dati di verifica della password e date di creazione e scadenza.',
             'Stato e data di lettura, annullamento o scadenza, consultabili dal link di controllo.',
             'Indirizzo IP in chiaro nei contatori che limitano creazioni, letture e annullamenti.',
-            'Un cookie per ricordare la lingua scelta, valido un anno. Le protezioni Cloudflare possono usare altri cookie tecnici, secondo le funzioni attive: [[cloudflareCookies]].',
+            'Un cookie per ricordare la lingua scelta, valido un anno. Un CDN o un reverse proxy a monte può impostare altri cookie tecnici, secondo le funzioni attive su quella distribuzione.',
           ],
         },
       ],
@@ -186,7 +184,7 @@ const privacyIt: LegalDocument = {
       blocks: [
         {
           kind: 'p',
-          text: 'L’applicazione non registra contenuti, password, token o corpi delle richieste. Proxy e hosting possono registrare IP, orari, percorsi richiesti e browser; i percorsi possono contenere i token, ma non la chiave dopo #. I server sono ospitati dal provider indicato nella documentazione del servizio, in un Paese riconosciuto dalla Commissione europea come adeguato per la protezione dei dati. Cloudflare gestisce il DNS e fa da proxy al traffico web, trattando indirizzi IP e metadati delle richieste. Questi fornitori possono trattare i dati tecnici necessari ai rispettivi servizi. Eventuali ulteriori trasferimenti fuori dallo Spazio economico europeo richiedono le garanzie previste dal GDPR; puoi chiedere dettagli a [[contact]].',
+          text: 'L’applicazione non registra contenuti, password, token o corpi delle richieste. Proxy e hosting possono registrare IP, orari, percorsi richiesti e browser; i percorsi possono contenere i token, ma non la chiave dopo #. I server sono ospitati dal provider indicato nella documentazione del servizio, in un Paese riconosciuto dalla Commissione europea come adeguato per la protezione dei dati. Il provider di hosting e l’eventuale CDN a monte trattano indirizzi IP e metadati delle richieste per erogare i rispettivi servizi. Questi fornitori possono trattare i dati tecnici necessari ai rispettivi servizi. Eventuali ulteriori trasferimenti fuori dallo Spazio economico europeo richiedono le garanzie previste dal GDPR; puoi chiedere dettagli a [[contact]].',
         },
         {
           kind: 'p',
@@ -233,7 +231,7 @@ const privacyEn: LegalDocument = {
             'Encrypted content, token hashes, password verification data, and creation and expiry dates.',
             'The status and time of a read, cancellation or expiry, available through the control link.',
             'Your IP address in cleartext in counters that limit creations, reads and cancellations.',
-            'A cookie that remembers your language choice for one year. Cloudflare protections may use other technical cookies depending on the enabled features: [[cloudflareCookies]].',
+            'A cookie that remembers your language choice for one year. A CDN or reverse proxy in front may set other technical cookies, depending on the features enabled on that deployment.',
           ],
         },
       ],
@@ -273,7 +271,7 @@ const privacyEn: LegalDocument = {
       blocks: [
         {
           kind: 'p',
-          text: 'The application does not log content, passwords, tokens or request bodies. A proxy and hosting provider may log IP addresses, times, requested paths and browsers; paths may include tokens, but never the key after #. The servers are hosted with the provider named in the service documentation, in a country the European Commission recognises as providing adequate data protection. Cloudflare manages DNS and proxies web traffic, processing IP addresses and request metadata. These providers may process the technical data needed for their respective services. Any further transfers outside the European Economic Area require GDPR safeguards; contact [[contact]] for details.',
+          text: 'The application does not log content, passwords, tokens or request bodies. A proxy and hosting provider may log IP addresses, times, requested paths and browsers; paths may include tokens, but never the key after #. The servers are hosted with the provider named in the service documentation, in a country the European Commission recognises as providing adequate data protection. The hosting provider and any CDN in front process IP addresses and request metadata to deliver their respective services. These providers may process the technical data needed for their respective services. Any further transfers outside the European Economic Area require GDPR safeguards; contact [[contact]] for details.',
         },
         {
           kind: 'p',
