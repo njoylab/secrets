@@ -144,6 +144,7 @@ const t = getDictionary(Astro.locals.locale);
   }
 
   function initCreateFlow(): void {
+    if (!window.isSecureContext || !window.crypto?.subtle) return;
     const form = byId<HTMLFormElement>('create-form');
     const panel = byId<HTMLElement>('result-panel');
     const status = byId<HTMLElement>('create-status');
@@ -433,6 +434,11 @@ const t = getDictionary(Astro.locals.locale);
       clearErrors();
       secret.focus();
     });
+
+    // Native submission must never serialize plaintext, even before this handler exists.
+    submit.disabled = false;
+    const runtimeNote = byId<HTMLElement>('create-runtime-note');
+    if (runtimeNote) runtimeNote.hidden = true;
   }
 
   initCreateFlow();

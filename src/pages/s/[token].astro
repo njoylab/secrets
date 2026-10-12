@@ -30,6 +30,7 @@ const presence = await peekSecretPresence(token);
         <Panel id="open-panel">
           <form
             id="open-form"
+            method="post"
             class="form"
             novalidate
             data-token={token}
@@ -49,11 +50,13 @@ const presence = await peekSecretPresence(token);
                 required
               />
             )}
+            <p class="note" id="open-runtime-note">{t.javascriptRequired}</p>
             <p class="status" id="open-status" role="status" aria-live="polite"></p>
             <button
               type="submit"
               class="btn btn-primary btn-block"
               id="open-submit"
+              disabled
               data-label-idle={t.open.reveal}
               data-label-busy={t.open.revealing}
             >
@@ -103,6 +106,7 @@ const presence = await peekSecretPresence(token);
   import {
     openPasswordVerifier,
     decodeShareFragment,
+    encodeShareFragment,
     decryptPayload,
     derivePasswordKey,
     type ContentBytes,
@@ -177,7 +181,16 @@ const presence = await peekSecretPresence(token);
 
   const openedFragment = takeFragment();
 
+  if (openedFragment) {
+    // Redirects inherit the fragment. It stays client-side across the locale redirect.
+    const fragment = encodeShareFragment(openedFragment.key, openedFragment.salt);
+    for (const link of document.querySelectorAll<HTMLAnchorElement>('nav.lang a')) {
+      link.hash = fragment;
+    }
+  }
+
   function initRevealFlow(): void {
+    if (!window.isSecureContext || !window.crypto?.subtle) return;
     const form = byId<HTMLFormElement>('open-form');
     const status = byId<HTMLElement>('open-status');
     const submit = byId<HTMLButtonElement>('open-submit');
@@ -371,6 +384,10 @@ const presence = await peekSecretPresence(token);
         copyStatus.textContent = '';
       }, COPY_RESET_DELAY);
     });
+
+    submit.disabled = false;
+    const runtimeNote = byId<HTMLElement>('open-runtime-note');
+    if (runtimeNote) runtimeNote.hidden = true;
   }
 
   initRevealFlow();

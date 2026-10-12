@@ -22,6 +22,60 @@ async function create(page: Page, text = 'synthetic test content', password = ''
   return { share, control, token };
 }
 
+for (const failure of ['disabled', 'bundle-failure'] as const) {
+  test(`sensitive forms never transmit plaintext when JavaScript is ${failure}`, async ({ browser, page }) => {
+    const { share } = await create(page, 'synthetic protected content', 'synthetic password');
+    const context = await browser.newContext({ javaScriptEnabled: failure !== 'disabled' });
+    if (failure === 'bundle-failure') await context.route('**/_astro/*.js', (route) => route.abort());
+    const fallback = await context.newPage();
+    const outgoing: string[] = [];
+    fallback.on('request', (request) => outgoing.push(request.url() + (request.postData() ?? '')));
+    try {
+      for (const [url, field, button] of [
+        ['/', '#secret', '#create-submit'],
+        [share, '#open-password', '#open-submit'],
+      ]) {
+        await fallback.goto(url!);
+        await fallback.locator(field!).fill('synthetic sensitive marker');
+        if (field === '#secret') await fallback.locator('#create-password').fill('synthetic password marker');
+        await expect(fallback.locator(button!)).toBeDisabled({ timeout: 2000 });
+        const currentUrl = fallback.url();
+        await fallback.locator(field!).press('Enter');
+        expect(fallback.url()).toBe(currentUrl);
+        // Even a forced native submission must have no sensitive successful controls.
+        await Promise.all([
+          fallback.waitForEvent('framenavigated', (frame) => frame === fallback.mainFrame()),
+          fallback.locator('form').evaluate((form) => (form as HTMLFormElement).submit()),
+        ]);
+        await fallback.waitForLoadState();
+      }
+      expect(outgoing.some((value) => /synthetic(?:[+% ]| sensitive| password)/.test(value))).toBe(false);
+    } finally {
+      await context.close();
+    }
+  });
+}
+
+for (const password of ['', 'synthetic locale password']) {
+  test(`language changes preserve ${password ? 'password-derived' : 'plain'} fragment keys without transmitting them`, async ({ page }) => {
+    const { share } = await create(page, 'synthetic locale content', password);
+    const requests: string[] = [];
+    page.on('request', (request) => requests.push(request.url() + (request.postData() ?? '')));
+    await page.goto(share);
+    await expect(page).not.toHaveURL(/#/);
+    await page.locator('nav.lang a[lang="it"]').click();
+    await expect(page.locator('html')).toHaveAttribute('lang', 'it');
+    await expect(page).not.toHaveURL(/#/);
+    await page.locator('nav.lang a[lang="en"]').click();
+    await expect(page.locator('html')).toHaveAttribute('lang', 'en');
+    if (password) await page.locator('#open-password').fill(password);
+    await page.locator('#open-submit').click();
+    await expect(page.locator('#secret-text')).toHaveText('synthetic locale content');
+    const key = new URL(share).hash.slice(1).split('.')[0]!;
+    expect(requests.some((value) => value.includes(key))).toBe(false);
+  });
+}
+
 test('encrypts before transmission, preserves inert text, and never consumes through GET', async ({ page, request }) => {
   const text = '<img src=x onerror="window.injected=true">\n  € synthetic text';
   const outgoing: string[] = [];

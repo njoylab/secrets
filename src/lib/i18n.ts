@@ -23,6 +23,7 @@ export type Dictionary = {
     robots: string;
   };
   skipToContent: string;
+  javascriptRequired: string;
   language: { label: string; it: string; en: string };
   nav: { home: string };
   create: {
@@ -133,6 +134,7 @@ const it: Dictionary = {
     robots: 'noindex, nofollow',
   },
   skipToContent: 'Vai al contenuto',
+  javascriptRequired: 'Richiede JavaScript e una connessione sicura.',
   language: { label: 'Lingua', it: 'Italiano', en: 'Inglese' },
   nav: { home: 'Nuovo segreto' },
 
@@ -246,6 +248,7 @@ const en: Dictionary = {
     robots: 'noindex, nofollow',
   },
   skipToContent: 'Skip to content',
+  javascriptRequired: 'Requires JavaScript and a secure connection.',
   language: { label: 'Language', it: 'Italian', en: 'English' },
   nav: { home: 'New secret' },
 

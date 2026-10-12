@@ -15,18 +15,18 @@ import { closePool, query } from '../src/lib/db.ts';
 import { resetConfigCache } from '../src/lib/env.ts';
 
 const TEST_DATABASE_URL = 'postgres://postgres:postgres@localhost:5433/secrets_test';
-
-function databaseName(url: string): string {
-  return decodeURIComponent(new URL(url).pathname).replace(/^\//, '');
-}
+let authorizedDatabaseUrl: string | undefined;
 
 /** The suite truncates tables, so refuse anything that is not obviously a test database. */
 function assertIsolatedDatabase(url: string): void {
-  const name = databaseName(url);
-  if (!name.endsWith('_test')) {
+  const database = new URL(url);
+  const name = decodeURIComponent(database.pathname).replace(/^\//, '');
+  if (!['postgres:', 'postgresql:'].includes(database.protocol) ||
+      !['localhost', '127.0.0.1', '[::1]'].includes(database.hostname) ||
+      database.search || !name.endsWith('_test')) {
     throw new Error(
       `Refusing to run the test suite against database "${name}": ` +
-        'set DATABASE_URL to a *_test database (see .env.test).',
+        'set DATABASE_URL to a local *_test database without query parameters (see .env.test).',
     );
   }
 }
@@ -45,6 +45,12 @@ export async function resetEnv(
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
   }
+  // Teardown runs even when beforeAll rejects the target. Never trust hook ordering.
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!authorizedDatabaseUrl || databaseUrl !== authorizedDatabaseUrl) {
+    throw new Error('Refusing database cleanup without the authorized test database');
+  }
+  assertIsolatedDatabase(databaseUrl);
   resetConfigCache();
   await query('DELETE FROM secret_receipts');
   await query('DELETE FROM secrets');
@@ -54,6 +60,7 @@ export async function resetEnv(
 beforeAll(async () => {
   if (!process.env.DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
   assertIsolatedDatabase(process.env.DATABASE_URL ?? TEST_DATABASE_URL);
+  authorizedDatabaseUrl = process.env.DATABASE_URL;
 
   // A fresh key per run: the suite must never read or write the developer's key.
   process.env.SECRET_ENCRYPTION_KEY = randomBytes(32).toString('base64url');
@@ -70,6 +77,9 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await resetEnv();
-  await closePool();
+  try {
+    if (authorizedDatabaseUrl) await resetEnv();
+  } finally {
+    await closePool();
+  }
 });

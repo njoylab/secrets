@@ -39,15 +39,15 @@ body:
     id: browser
     attributes:
       label: Browser and OS
-    options:
-      - Chromium on Linux
-      - Chromium on macOS
-      - Chromium on Windows
-      - Firefox on Linux
-      - Firefox on macOS
-      - Firefox on Windows
-      - Safari on macOS or iOS
-      - Other
+      options:
+        - Chromium on Linux
+        - Chromium on macOS
+        - Chromium on Windows
+        - Firefox on Linux
+        - Firefox on macOS
+        - Firefox on Windows
+        - Safari on macOS or iOS
+        - Other
     validations:
       required: true
 
