@@ -10,5 +10,5 @@ test-results/
 playwright-report/
 
 # Internal working documents, not part of the published source.
-AGENTS.md
 PIANO_*.md
+*.local.md
