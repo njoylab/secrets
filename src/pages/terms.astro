@@ -1,7 +1,8 @@
 ---
 import LegalLayout from '../layouts/LegalLayout.astro';
+import { getLegalDocument } from '../lib/legal.ts';
 
 export const prerender = false;
 ---
 
-<LegalLayout kind="terms" />
+<LegalLayout document={getLegalDocument('terms', Astro.locals.locale)} />

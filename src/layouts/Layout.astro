@@ -43,6 +43,7 @@ const next = `${Astro.url.pathname}${Astro.url.search}`;
       <footer class="site-footer">
         <p class="site-footer-limits">{t.footer.limits}</p>
         <nav class="site-footer-nav" aria-label={t.footer.linksLabel}>
+          <a href="/how">{t.footer.how}</a>
           <a href="/privacy">{t.footer.privacy}</a>
           <a href="/terms">{t.footer.terms}</a>
           {sourceUrl && (

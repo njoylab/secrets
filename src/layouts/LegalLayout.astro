@@ -1,20 +1,20 @@
 ---
 /**
- * Shared shell for the two legal pages: title, revision date, summary and the
- * sections. The prose lives in `src/lib/legal.ts`; nothing legal is written here.
+ * Shared shell for the document pages (privacy, terms, how it works): title,
+ * revision date, summary and the sections. The prose lives in `src/lib/legal.ts`
+ * and `src/lib/how.ts`; nothing is written here.
  */
 import Layout from './Layout.astro';
 import { getDictionary } from '../lib/i18n.ts';
-import { getLegalDocument, resolveLegalText, type LegalDocumentKind } from '../lib/legal.ts';
+import { resolveLegalText, type LegalDocument } from '../lib/legal.ts';
 
 interface Props {
-  kind: LegalDocumentKind;
+  document: LegalDocument;
 }
 
-const { kind } = Astro.props;
+const { document } = Astro.props;
 const locale = Astro.locals.locale;
 const t = getDictionary(locale);
-const document = getLegalDocument(kind, locale);
 // Read in the reader's language, from the ISO date in UTC so the day cannot shift.
 const updated = new Intl.DateTimeFormat(locale, { dateStyle: 'long', timeZone: 'UTC' }).format(
   new Date(`${document.updated}T00:00:00Z`),

@@ -1,0 +1,8 @@
+---
+import LegalLayout from '../layouts/LegalLayout.astro';
+import { getHowDocument } from '../lib/how.ts';
+
+export const prerender = false;
+---
+
+<LegalLayout document={getHowDocument(Astro.locals.locale)} />

@@ -123,6 +123,7 @@ export type Dictionary = {
   footer: {
     limits: string;
     linksLabel: string;
+    how: string;
     privacy: string;
     terms: string;
     source: string;
@@ -246,7 +247,8 @@ const it: Dictionary = {
 
   footer: {
     limits: 'Limite 50 KiB · una sola lettura',
-    linksLabel: 'Documenti legali',
+    linksLabel: 'Documenti',
+    how: 'Come funziona',
     privacy: 'Informativa privacy',
     terms: 'Condizioni d\'uso',
     source: 'Codice sorgente',
@@ -367,7 +369,8 @@ const en: Dictionary = {
 
   footer: {
     limits: '50 KiB limit · one read only',
-    linksLabel: 'Legal documents',
+    linksLabel: 'Documents',
+    how: 'How it works',
     privacy: 'Privacy policy',
     terms: 'Terms of use',
     source: 'Source code',
