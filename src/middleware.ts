@@ -42,9 +42,14 @@ export const onRequest = defineMiddleware(async (context, next) => {
 
   // The whole service is unindexable and uncacheable: pages hold no secret, but
   // the reveal flow must never be stored by intermediaries.
+  // A rendered page already carries Astro's policy with the hashes of its inline
+  // scripts and styles; replacing it would block them. Everything else gets the
+  // deny-all policy from SENSITIVE_HEADERS.
+  const pagePolicy = response.headers.get('content-security-policy');
   for (const [header, value] of Object.entries(SENSITIVE_HEADERS)) {
     response.headers.set(header, value);
   }
+  if (pagePolicy) response.headers.set('content-security-policy', pagePolicy);
   const hsts = hstsHeaderValue(context.request);
   if (hsts) response.headers.set('strict-transport-security', hsts);
   response.headers.set('x-robots-tag', getDictionary(locale).meta.robots);

@@ -4,7 +4,7 @@
 import { Buffer } from 'node:buffer';
 import { getConfig } from './env.ts';
 import { checkPostOrigin, errorResponse, resolveClientIp } from './http.ts';
-import { consumeRateLimit, type RateLimitBucket } from './rate-limit.ts';
+import { consumeRateLimit, rateLimitSubject, type RateLimitBucket } from './rate-limit.ts';
 import type { Locale } from './i18n.ts';
 
 export interface RequestContext {
@@ -16,7 +16,8 @@ export interface RequestContext {
 export type GuardResult = { ok: true; context: RequestContext } | { ok: false; response: Response };
 
 /**
- * Reject cross-origin POSTs before any body is read, then rate limit by client IP.
+ * Reject cross-origin POSTs before any body is read, then rate limit by client IP
+ * (IPv6 clients by their /64, see `rateLimitSubject`).
  * Ordering matters: a cross-origin flood must not consume a subject's quota.
  *
  * Cancel uses the reveal rule, the same max and the same window, under its own
@@ -39,7 +40,7 @@ export async function guardRequest(
   }
 
   const rule = bucket === 'create' ? config.createRateLimit : config.revealRateLimit;
-  const result = await consumeRateLimit(bucket, clientIp, rule);
+  const result = await consumeRateLimit(bucket, rateLimitSubject(clientIp), rule);
   if (!result.allowed) {
     return { ok: false, response: errorResponse(locale, 'rateLimited', 429, result.retryAfterSeconds) };
   }

@@ -8,6 +8,17 @@ import { normalizeAddress } from './address.mjs';
 /** Internal header set by server.mjs with the IP it resolved. Untrusted from clients. */
 export const RESOLVED_IP_HEADER = 'x-resolved-client-ip';
 
+/**
+ * Policy for every response that is not a rendered page: JSON, redirects and
+ * errors load nothing, so they allow nothing.
+ *
+ * Pages carry the policy Astro builds instead (see `security.csp` in
+ * `astro.config.mjs`), because only Astro knows the hashes of the scripts and
+ * styles it inlines. The middleware keeps that header and falls back to this one.
+ */
+export const NON_PAGE_CSP =
+  "default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'";
+
 /** Headers applied to every sensitive response: never cached, never indexed, no referrer leakage. */
 export const SENSITIVE_HEADERS: Readonly<Record<string, string>> = Object.freeze({
   'cache-control': 'no-store, no-cache, must-revalidate, private',
@@ -16,9 +27,38 @@ export const SENSITIVE_HEADERS: Readonly<Record<string, string>> = Object.freeze
   'referrer-policy': 'no-referrer',
   'x-content-type-options': 'nosniff',
   'x-frame-options': 'DENY',
-  'content-security-policy': "base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'",
-  referrer: 'no-referrer',
+  'content-security-policy': NON_PAGE_CSP,
 });
+
+const REDIRECT_BASE = 'http://placeholder.invalid';
+
+/**
+ * Reduce an untrusted redirect target to a path on this site, or `/`.
+ *
+ * Whitespace and control characters are refused rather than stripped: the
+ * browser's URL parser silently drops tab and newline, so `/\t/evil.example`
+ * leaves the server as a path and arrives as the protocol-relative
+ * `//evil.example`. The value is then resolved against a placeholder origin and
+ * must stay on it; only the normalized path and query are returned, so what the
+ * `Location` header carries is exactly what was checked.
+ */
+export function safeRedirectPath(raw: string | null | undefined): string {
+  if (!raw) return '/';
+  if (/[\u0000-\u0020\u007f-\u009f\s]/u.test(raw)) return '/';
+  if (!raw.startsWith('/') || raw.startsWith('//') || raw.includes('\\')) return '/';
+
+  let resolved: URL;
+  try {
+    resolved = new URL(raw, REDIRECT_BASE);
+  } catch {
+    return '/';
+  }
+  if (resolved.origin !== REDIRECT_BASE) return '/';
+  // Dot segments can collapse into a leading `//` (`/..//evil.example`), which
+  // the browser would read as protocol relative.
+  const path = `${resolved.pathname}${resolved.search}`;
+  return path.startsWith('//') ? '/' : path;
+}
 
 const HSTS_MAX_AGE = 'max-age=15552000';
 

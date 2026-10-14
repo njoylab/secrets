@@ -7,7 +7,9 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  NON_PAGE_CSP,
   RESOLVED_IP_HEADER,
+  SENSITIVE_HEADERS,
   acceptableOrigins,
   checkPostOrigin,
   errorResponse,
@@ -15,6 +17,7 @@ import {
   isTrustedProxy,
   jsonResponse,
   resolveClientIp,
+  safeRedirectPath,
 } from '../src/lib/http.ts';
 
 const NO_ORIGINS: readonly string[] = [];
@@ -409,7 +412,16 @@ describe('sensitive response headers', () => {
     expect(response.headers.get('pragma')).toBe('no-cache');
     expect(response.headers.get('expires')).toBe('0');
     expect(response.headers.get('content-type')).toBe('application/json; charset=utf-8');
+    expect(response.headers.get('content-security-policy')).toBe(NON_PAGE_CSP);
   }
+
+  it('gives non-page responses a deny-all policy and only real header names', () => {
+    expect(NON_PAGE_CSP).toContain("default-src 'none'");
+    expect(NON_PAGE_CSP).toContain("frame-ancestors 'none'");
+    expect(NON_PAGE_CSP).toContain("base-uri 'none'");
+    // `referrer` is not a response header; `referrer-policy` is.
+    expect(Object.keys(SENSITIVE_HEADERS)).not.toContain('referrer');
+  });
 
   it('hardens every jsonResponse, whatever the body', async () => {
     const responses = [
@@ -463,5 +475,84 @@ describe('sensitive response headers', () => {
     expect(errorResponse('en', 'rateLimited', 429, 1).headers.get('retry-after')).toBe('1');
     expect(errorResponse('en', 'rateLimited', 429).headers.get('retry-after')).toBeNull();
     expect(errorResponse('en', 'crossOrigin', 403).headers.get('retry-after')).toBeNull();
+  });
+});
+
+describe('safeRedirectPath', () => {
+  /** What the locale endpoint receives once the query string is decoded. */
+  function nextParam(rawQuery: string): string | null {
+    return new URL(`http://localhost/api/locale?lang=it&next=${rawQuery}`).searchParams.get('next');
+  }
+
+  it('keeps site paths with their query string', () => {
+    expect(safeRedirectPath('/')).toBe('/');
+    expect(safeRedirectPath('/privacy')).toBe('/privacy');
+    expect(safeRedirectPath('/?lang=en&x=1')).toBe('/?lang=en&x=1');
+    expect(safeRedirectPath('/terms?ref=https://other.example/')).toBe('/terms?ref=https://other.example/');
+    const token = 'A'.repeat(21) + '-_' + 'z'.repeat(20);
+    expect(safeRedirectPath(`/s/${token}`)).toBe(`/s/${token}`);
+    expect(safeRedirectPath(`/c/${token}?x=1`)).toBe(`/c/${token}?x=1`);
+    expect(safeRedirectPath(nextParam('%2Fs%2Fabc%3Fx%3D1'))).toBe('/s/abc?x=1');
+  });
+
+  it('drops the fragment', () => {
+    expect(safeRedirectPath('/s/abc#key')).toBe('/s/abc');
+  });
+
+  it('falls back to / for a missing or off-site target', () => {
+    for (const value of [
+      null,
+      undefined,
+      '',
+      'privacy',
+      '//evil.example/',
+      '///evil.example/',
+      'https://evil.example/',
+      'javascript:alert(1)',
+      '/\\evil.example/',
+      '\\\\evil.example/',
+      '/\\/evil.example/',
+    ]) {
+      expect(safeRedirectPath(value)).toBe('/');
+    }
+  });
+
+  it('refuses whitespace and control characters the URL parser would strip', () => {
+    // Browsers drop tab and newline while parsing, turning these into `//evil.example/`.
+    for (const value of [
+      '/\t/evil.example/',
+      '/\n/evil.example/',
+      '/\r/evil.example/',
+      '/\r\n/evil.example/',
+      '\t//evil.example/',
+      ' //evil.example/',
+      '/ /evil.example/',
+      '/\u0000/evil.example/',
+      '/\u007f/evil.example/',
+      '/\u00a0/evil.example/',
+      '/\u2028/evil.example/',
+      '/privacy\t',
+    ]) {
+      expect(safeRedirectPath(value)).toBe('/');
+    }
+    expect(safeRedirectPath(nextParam('/%09/evil.example/'))).toBe('/');
+    expect(safeRedirectPath(nextParam('/%0A/evil.example/'))).toBe('/');
+    expect(safeRedirectPath(nextParam('/%0D%0A/evil.example/'))).toBe('/');
+    expect(safeRedirectPath(nextParam('%2F%09%2Fevil.example%2F'))).toBe('/');
+    expect(safeRedirectPath(nextParam('/%5Cevil.example/'))).toBe('/');
+  });
+
+  it('keeps percent-encoded separators encoded, so they stay inside the path', () => {
+    expect(safeRedirectPath('/%2F%2Fevil.example/')).toBe('/%2F%2Fevil.example/');
+    expect(safeRedirectPath('/%5Cevil.example/')).toBe('/%5Cevil.example/');
+  });
+
+  it('returns the normalized path that it checked', () => {
+    expect(safeRedirectPath('/a/../privacy')).toBe('/privacy');
+    expect(safeRedirectPath('/./terms')).toBe('/terms');
+    // Dot segments must not collapse into a protocol relative `//host`.
+    expect(safeRedirectPath('/..//evil.example/')).toBe('/');
+    expect(safeRedirectPath('/.//evil.example/')).toBe('/');
+    expect(safeRedirectPath('/%2e%2e//evil.example/')).toBe('/');
   });
 });

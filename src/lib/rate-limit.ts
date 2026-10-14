@@ -78,25 +78,57 @@ export async function consumeRateLimit(
   };
 }
 
-/** Best-effort probe used on GET pages, where the user still needs a usable form. */
-export async function peekRateLimit(
-  bucket: string,
-  subject: string,
-  rule: RateLimitRule,
-): Promise<RateLimitResult> {
-  const { rows } = await query<RateLimitRow>(
-    `SELECT hits,
-            GREATEST(0, EXTRACT(EPOCH FROM (rate_limits.window_started_at + make_interval(secs => $3::double precision) - now())))::int AS retry_after
-       FROM rate_limits
-      WHERE bucket = $1 AND subject = $2`,
-    [bucket, subject, rule.windowSeconds],
-  );
+/**
+ * The identity a client's budget is charged to.
+ *
+ * IPv4 addresses are used as they are. An IPv6 address is reduced to its /64:
+ * that is the smallest block a provider assigns to one subscriber, and every
+ * address inside it is free to the client, so counting full addresses would hand
+ * out an unlimited budget. Anything that does not parse, including `unknown`, is
+ * returned unchanged. Only the rate limit sees this value.
+ */
+export function rateLimitSubject(clientIp: string): string {
+  const groups = parseIpv6Groups(clientIp);
+  if (!groups) return clientIp;
+  return `${groups.slice(0, 4).map((group) => group.toString(16)).join(':')}::/64`;
+}
 
-  const row = rows[0];
-  if (!row) return { allowed: true, remaining: rule.max, retryAfterSeconds: rule.windowSeconds };
-  return {
-    allowed: row.hits < rule.max,
-    remaining: Math.max(0, rule.max - row.hits),
-    retryAfterSeconds: row.retry_after ?? rule.windowSeconds,
+/** The eight 16-bit groups of an IPv6 literal, with `::` expanded, or null. */
+function parseIpv6Groups(value: string): number[] | null {
+  if (!value.includes(':')) return null;
+  const halves = value.split('::');
+  if (halves.length > 2) return null;
+
+  const toGroups = (part: string): string[] | null => {
+    if (part === '') return [];
+    const parts = part.split(':');
+    // An embedded dotted quad (`64:ff9b::192.0.2.1`) fills the last two groups.
+    const last = parts[parts.length - 1] ?? '';
+    if (last.includes('.')) {
+      const octets = last.split('.');
+      if (octets.length !== 4 || octets.some((octet) => !/^\d{1,3}$/.test(octet) || Number(octet) > 255)) {
+        return null;
+      }
+      const [a, b, c, d] = octets.map(Number) as [number, number, number, number];
+      parts.splice(-1, 1, ((a << 8) | b).toString(16), ((c << 8) | d).toString(16));
+    }
+    return parts;
   };
+
+  // A dotted quad is only valid as the final groups of the address.
+  if (halves.length === 2 && (halves[0] ?? '').includes('.')) return null;
+  const head = toGroups(halves[0] ?? '');
+  const tail = halves.length === 2 ? toGroups(halves[1] ?? '') : [];
+  if (!head || !tail) return null;
+
+  let groups: string[];
+  if (halves.length === 2) {
+    const missing = 8 - head.length - tail.length;
+    if (missing < 1) return null;
+    groups = [...head, ...Array<string>(missing).fill('0'), ...tail];
+  } else {
+    groups = head;
+  }
+  if (groups.length !== 8 || !groups.every((group) => /^[0-9a-f]{1,4}$/i.test(group))) return null;
+  return groups.map((group) => Number.parseInt(group, 16));
 }

@@ -29,6 +29,21 @@ export default defineConfig({
   security: {
     checkOrigin: true,
     allowedDomains,
+    // Server-rendered pages get this policy as a response header, with the
+    // hashes of every script and style Astro inlines added to script-src and
+    // style-src. The middleware keeps it and gives non-page responses a
+    // deny-all policy. The QR code is drawn on a canvas, so no data: images.
+    csp: {
+      directives: [
+        "default-src 'self'",
+        "img-src 'self'",
+        "connect-src 'self'",
+        "base-uri 'none'",
+        "object-src 'none'",
+        "frame-ancestors 'none'",
+        "form-action 'self'",
+      ],
+    },
   },
   devToolbar: {
     enabled: false,

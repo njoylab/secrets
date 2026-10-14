@@ -3,19 +3,20 @@
  *
  * Counters live in PostgreSQL so limits hold across instances, and the check
  * and the increment share one statement: these tests verify the budget, the
- * per-subject isolation, the window rollover and that the GET side peek never
- * consumes quota.
+ * per-subject isolation and the window rollover. The subject mapping is pure and
+ * checked without the database.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import { query } from '../src/lib/db.ts';
 import type { RateLimitRule } from '../src/lib/env.ts';
-import { CREATE_BUCKET, REVEAL_BUCKET, consumeRateLimit, peekRateLimit } from '../src/lib/rate-limit.ts';
+import { CREATE_BUCKET, REVEAL_BUCKET, consumeRateLimit, rateLimitSubject } from '../src/lib/rate-limit.ts';
 import {
   countRateLimits,
   fetchRateLimitRows,
   insertRateLimitRow,
   resetEnv,
 } from './helpers.ts';
+import { normalizeAddress } from '../src/lib/address.mjs';
 
 const RULE: RateLimitRule = { max: 3, windowSeconds: 60 };
 const OTHER_RULE: RateLimitRule = { max: 2, windowSeconds: 600 };
@@ -191,45 +192,52 @@ describe('consumeRateLimit: the window', () => {
   });
 });
 
-describe('peekRateLimit', () => {
-  it('reports the full budget when the subject has never been seen', async () => {
-    const peeked = await peekRateLimit(CREATE_BUCKET, 'never-seen', RULE);
-    expect(peeked).toEqual({ allowed: true, remaining: RULE.max, retryAfterSeconds: RULE.windowSeconds });
-    // A probe creates nothing: the form must still work.
-    expect(await countRateLimits()).toBe(0);
+describe('rateLimitSubject', () => {
+  it('keeps IPv4 addresses, including ones unwrapped from the mapped form', () => {
+    expect(rateLimitSubject('203.0.113.7')).toBe('203.0.113.7');
+    expect(rateLimitSubject(normalizeAddress('::ffff:203.0.113.7'))).toBe('203.0.113.7');
   });
 
-  it('reports the current usage without incrementing it', async () => {
-    await consumeRateLimit(REVEAL_BUCKET, 'subject-peek', RULE);
-    await consumeRateLimit(REVEAL_BUCKET, 'subject-peek', RULE);
+  it('charges every address of an IPv6 /64 to one subject', () => {
+    const subject = '2001:db8:85a3:12::/64';
+    expect(rateLimitSubject('2001:0db8:85a3:0012:0000:8a2e:0370:7334')).toBe(subject);
+    expect(rateLimitSubject('2001:db8:85a3:12::1')).toBe(subject);
+    expect(rateLimitSubject('2001:db8:85a3:12:ffff:ffff:ffff:ffff')).toBe(subject);
+    expect(rateLimitSubject('2001:DB8:85A3:12::abcd')).toBe(subject);
+    // A neighbouring /64 is a different subscriber.
+    expect(rateLimitSubject('2001:db8:85a3:13::1')).toBe('2001:db8:85a3:13::/64');
+  });
 
-    for (let probe = 0; probe < 5; probe += 1) {
-      const peeked = await peekRateLimit(REVEAL_BUCKET, 'subject-peek', RULE);
-      expect(peeked.allowed).toBe(true);
-      expect(peeked.remaining).toBe(RULE.max - 2);
-      expect(peeked.retryAfterSeconds).toBeGreaterThan(0);
-      expect(peeked.retryAfterSeconds).toBeLessThanOrEqual(RULE.windowSeconds);
+  it('expands :: wherever it sits', () => {
+    expect(rateLimitSubject('::1')).toBe('0:0:0:0::/64');
+    expect(rateLimitSubject('::')).toBe('0:0:0:0::/64');
+    expect(rateLimitSubject('2001:db8::')).toBe('2001:db8:0:0::/64');
+    expect(rateLimitSubject('2001:db8::5:6:7:8')).toBe('2001:db8:0:0::/64');
+    expect(rateLimitSubject('fe80::1:2:3:4:5')).toBe('fe80:0:0:1::/64');
+    expect(rateLimitSubject('64:ff9b::192.0.2.1')).toBe('64:ff9b:0:0::/64');
+  });
+
+  it('never folds an IPv6 subject onto an IPv4 one', () => {
+    expect(rateLimitSubject('::ffff:203.0.113.7')).toBe('0:0:0:0::/64');
+    expect(rateLimitSubject('::ffff:203.0.113.7')).not.toBe('203.0.113.7');
+  });
+
+  it('leaves unknown and unparsable values unchanged', () => {
+    for (const value of [
+      'unknown',
+      '',
+      'not-an-address',
+      '1:2:3:4:5:6:7:8:9',
+      '1:2:3:4:5:6:7',
+      '1::2::3',
+      '1:2:3:4:5:6:7::8',
+      '12345::1',
+      'g::1',
+      '1.2.3.4::1',
+      '::1.2.3.256',
+      'fe80::1%eth0',
+    ]) {
+      expect(rateLimitSubject(value)).toBe(value);
     }
-
-    const rows = await fetchRateLimitRows(REVEAL_BUCKET, 'subject-peek');
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.hits).toBe(2);
-  });
-
-  it('reports the exhausted budget once the limit is reached', async () => {
-    for (let call = 0; call < RULE.max; call += 1) {
-      await consumeRateLimit(CREATE_BUCKET, 'subject-dry', RULE);
-    }
-    const peeked = await peekRateLimit(CREATE_BUCKET, 'subject-dry', RULE);
-    expect(peeked.allowed).toBe(false);
-    expect(peeked.remaining).toBe(0);
-    expect((await fetchRateLimitRows(CREATE_BUCKET, 'subject-dry'))[0]?.hits).toBe(RULE.max);
-  });
-
-  it('clamps the retry delay to zero for a counter whose window has passed', async () => {
-    await insertRateLimitRow(CREATE_BUCKET, 'stale-peek', 3600, 1);
-    const peeked = await peekRateLimit(CREATE_BUCKET, 'stale-peek', RULE);
-    expect(peeked.retryAfterSeconds).toBe(0);
-    expect(peeked.remaining).toBe(RULE.max - 1);
   });
 });
