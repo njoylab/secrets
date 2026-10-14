@@ -2,9 +2,11 @@
  * Content layer: AES-256-GCM over the secret text, with a key that never leaves
  * the browser.
  *
- * The browser generates a 32 byte key, seals the secret with it before the POST
- * and keeps the key in the `#` fragment of the share link, which browsers never
- * send to a server. The server only ever stores the resulting `payload`, and
+ * The browser generates a 32 byte fragment key and keeps it in the `#` fragment
+ * of the share link, which browsers never send to a server. From that key, and
+ * the optional password, it derives a content key that seals the secret before
+ * the POST and a separate auth key that proves possession of both on reveal
+ * (`deriveSecretKeys`). The server only ever stores the resulting `payload`, and
  * `decryptSecret` in `src/lib/crypto.ts` seals that payload a second time with
  * the deployment key, so a database dump is still not the text.
  *
@@ -39,32 +41,18 @@ export const PASSWORD_SALT_LENGTH = 22;
 export const PASSWORD_KDF_ITERATIONS = 600_000;
 export const PASSWORD_MAX_LENGTH = 512;
 
-const PASSWORD_PROOF_PREFIX = 'echovalue-secrets-verifier-v2:';
+/**
+ * HKDF `info` labels. Each label yields an independent 256-bit output from the
+ * same input material, so the content key and the auth key cannot be computed
+ * from each other: knowing what the server stores, or what the reveal request
+ * carries, says nothing about the key that opens the payload.
+ */
+const CONTENT_KEY_INFO = new TextEncoder().encode('echovalue-secrets-v3:content-key');
+const AUTH_KEY_INFO = new TextEncoder().encode('echovalue-secrets-v3:auth-key');
 
-/** The proof is independent of the content key; its hash cannot authorize reveal. */
-export async function createPasswordVerifier(key: ContentBytes): Promise<{
-  verifier: string;
-  revealProofHash: string;
-}> {
-  const proof = encodeBase64Url(crypto.getRandomValues(new Uint8Array(32)));
-  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(proof)));
-  return {
-    verifier: await encryptPayload(PASSWORD_PROOF_PREFIX + proof, key),
-    revealProofHash: Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join(''),
-  };
-}
+/** Auth key size, in bytes. Its base64url text has the share-token shape. */
+export const AUTH_KEY_BYTES = 32;
 
-/** A valid decrypted verifier releases the authorization proof. */
-export async function openPasswordVerifier(verifier: string, key: ContentBytes): Promise<string> {
-  const opened = await decryptPayload(verifier, key);
-  if (opened.startsWith(PASSWORD_PROOF_PREFIX)) {
-    const proof = opened.slice(PASSWORD_PROOF_PREFIX.length);
-    if (decodeBase64Url(proof)?.byteLength === 32) return proof;
-  }
-  throw new Error('Invalid password verifier');
-}
-
-const PASSWORD_HKDF_INFO = new TextEncoder().encode('echovalue-secrets-v1');
 const SHARE_TOKEN_SHAPE = new RegExp(`^[A-Za-z0-9_-]{${SHARE_TOKEN_LENGTH}}$`);
 
 const BASE64URL_SHAPE = /^[A-Za-z0-9_-]*$/;
@@ -216,51 +204,94 @@ export function controlUrl(pageOrigin: string, token: string): string | null {
 }
 
 /**
- * Content key that requires both the fragment key and the password.
+ * Password length as the derivation measures it: NFKC can expand a string, so
+ * the form must check this value, not the raw input length, against
+ * `PASSWORD_MAX_LENGTH`.
+ */
+export function normalizedPasswordLength(password: string): number {
+  return password.normalize('NFKC').length;
+}
+
+export interface SecretKeys {
+  /** Opens and seals the payload. Never leaves the browser. */
+  readonly contentKey: ContentBytes;
+  /** Sent on reveal so the server can check it against the stored hash. */
+  readonly authKey: ContentBytes;
+}
+
+/**
+ * Derive the content key and the auth key from the fragment key and, when a
+ * salt is present, the password.
  *
- * PBKDF2-HMAC-SHA256 produces a KEK, and HKDF mixes that KEK with the fragment
- * key. Either input alone is not enough to open the payload. The password is
+ * Without a password both keys are HKDF outputs of the fragment key. With a
+ * password, PBKDF2-HMAC-SHA256 turns it into a 32 byte value used as the HKDF
+ * salt, so both outputs need the fragment key and the password. The server only
+ * ever holds `SHA-256(authKey)`: a database dump lacks the fragment key, and the
+ * share link alone gives an attacker nothing to test guesses against offline.
+ * Every guess has to be a reveal request, which is rate limited. The password is
  * normalised to NFKC and never leaves this function.
  */
-export async function derivePasswordKey(
+export async function deriveSecretKeys(
   fragmentKey: ContentBytes,
-  password: string,
-  salt: ContentBytes,
-): Promise<ContentBytes> {
-  const normalized = password.normalize('NFKC');
-  if (normalized.length === 0 || normalized.length > PASSWORD_MAX_LENGTH) {
-    throw new Error('Password is empty or too long');
+  password: string | null,
+  salt: ContentBytes | null,
+): Promise<SecretKeys> {
+  if (fragmentKey.byteLength !== CONTENT_KEY_BYTES) {
+    throw new Error('Fragment key is the wrong size');
   }
-  if (fragmentKey.byteLength !== CONTENT_KEY_BYTES || salt.byteLength !== PASSWORD_SALT_BYTES) {
-    throw new Error('Password key material is the wrong size');
+  if ((password === null) !== (salt === null)) {
+    throw new Error('A password and its salt must be supplied together');
   }
 
-  const material = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(normalized),
-    'PBKDF2',
-    false,
-    ['deriveBits'],
-  );
-  const kek = new Uint8Array(
-    await crypto.subtle.deriveBits(
-      { name: 'PBKDF2', hash: 'SHA-256', salt, iterations: PASSWORD_KDF_ITERATIONS },
-      material,
-      256,
-    ),
-  );
-  const base = await crypto.subtle.importKey('raw', fragmentKey, 'HKDF', false, ['deriveBits']);
-  const derived = new Uint8Array(
-    await crypto.subtle.deriveBits(
-      { name: 'HKDF', hash: 'SHA-256', salt: kek, info: PASSWORD_HKDF_INFO },
-      base,
-      256,
-    ),
-  );
-  if (derived.byteLength !== CONTENT_KEY_BYTES) {
-    throw new Error('Derived content key is the wrong size');
+  let hkdfSalt: ContentBytes = new Uint8Array(0);
+  if (password !== null && salt !== null) {
+    const normalized = password.normalize('NFKC');
+    if (normalized.length === 0 || normalized.length > PASSWORD_MAX_LENGTH) {
+      throw new Error('Password is empty or too long');
+    }
+    if (salt.byteLength !== PASSWORD_SALT_BYTES) {
+      throw new Error('Password salt is the wrong size');
+    }
+    const material = await crypto.subtle.importKey(
+      'raw',
+      new TextEncoder().encode(normalized),
+      'PBKDF2',
+      false,
+      ['deriveBits'],
+    );
+    hkdfSalt = new Uint8Array(
+      await crypto.subtle.deriveBits(
+        { name: 'PBKDF2', hash: 'SHA-256', salt, iterations: PASSWORD_KDF_ITERATIONS },
+        material,
+        256,
+      ),
+    );
   }
-  return derived;
+
+  const base = await crypto.subtle.importKey('raw', fragmentKey, 'HKDF', false, ['deriveBits']);
+  const expand = async (info: ContentBytes): Promise<ContentBytes> =>
+    new Uint8Array(
+      await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: hkdfSalt, info }, base, 256),
+    );
+  return { contentKey: await expand(CONTENT_KEY_INFO), authKey: await expand(AUTH_KEY_INFO) };
+}
+
+/** Text form of the auth key for the reveal request body. */
+export function encodeAuthKey(authKey: Uint8Array): string {
+  return encodeBase64Url(authKey);
+}
+
+/** Canonical auth key bytes, or `null` for anything that is not exactly 32 bytes. */
+export function decodeAuthKey(text: unknown): ContentBytes | null {
+  if (typeof text !== 'string' || text.length !== SHARE_TOKEN_LENGTH) return null;
+  const bytes = decodeBase64Url(text);
+  return bytes && bytes.byteLength === AUTH_KEY_BYTES ? bytes : null;
+}
+
+/** Lowercase hex SHA-256 of the auth key bytes: the only form the server stores. */
+export async function hashAuthKey(authKey: ContentBytes): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', authKey));
+  return Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
 /**

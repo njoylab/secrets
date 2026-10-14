@@ -2,10 +2,11 @@
  * POST /api/secrets — create a secret and return its tokens.
  *
  * The body carries a payload the browser already sealed with a key that never
- * leaves the client. An optional verifier is sealed under the same key after
- * the password has been mixed in. This endpoint never sees the plaintext, the
- * content key or the password. A `password` field is refused: storing one here
- * would look like protection the server cannot actually provide.
+ * leaves the client, and the SHA-256 of a separate auth key derived from the
+ * fragment key and the optional password. This endpoint never sees the
+ * plaintext, the content key, the auth key or the password. A `password` field
+ * is refused: storing one here would look like protection the server cannot
+ * actually provide.
  *
  * The reply carries the two tokens, not the links. Behind a reverse proxy this
  * process may rebuild `request.url` to a host it does not recognise, and the
@@ -37,8 +38,8 @@ export const POST: APIRoute = async (context) => {
     const created = await createSecret({
       payload: body.payload as string,
       expiresIn: body.expiresIn as ExpiryPreset,
-      verifier: body.verifier as string | undefined,
-      revealProofHash: body.revealProofHash as string | undefined,
+      authHash: body.authHash as string,
+      passwordProtected: body.passwordProtected as boolean | undefined,
     });
 
     const config = getConfig();
@@ -52,7 +53,7 @@ export const POST: APIRoute = async (context) => {
         token: created.token,
         controlToken: created.controlToken,
         expiresAt: created.expiresAt.toISOString(),
-        requiresPassword: typeof body.verifier === 'string' && body.verifier.length > 0,
+        requiresPassword: body.passwordProtected === true,
         secureCookies: config.secureCookies,
       },
       { status: 201, locale },

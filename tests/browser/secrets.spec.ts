@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { test, expect, type Page } from '@playwright/test';
 import pg from 'pg';
 import { encodeQr } from '../../src/lib/qr.ts';
+import { decodeShareFragment, deriveSecretKeys, encodeAuthKey } from '../../src/lib/content-crypto.ts';
 
 // The config validates the target before this destructive fixture can run.
 const pool = new pg.Pool({ connectionString: process.env.TEST_DATABASE_URL });
@@ -9,6 +10,13 @@ test.beforeEach(async () => {
   await pool.query('TRUNCATE secrets, secret_receipts, rate_limits');
 });
 test.afterAll(async () => { await pool.end(); });
+
+/** The auth key the reveal page would send for a share link without a password. */
+async function authKeyFor(share: string): Promise<string> {
+  const fragment = decodeShareFragment(new URL(share).hash.slice(1));
+  if (!fragment) throw new Error('share link without a usable fragment');
+  return encodeAuthKey((await deriveSecretKeys(fragment.key, null, null)).authKey);
+}
 
 async function create(page: Page, text = 'synthetic test content', password = '') {
   await page.goto('/');
@@ -105,9 +113,9 @@ test('encrypts before transmission, preserves inert text, and never consumes thr
 test('rejects password and direct API bypasses without consumption and clears password after creation reset', async ({ page, request }) => {
   const password = 'synthetic-browser-password';
   const { share, control, token } = await create(page, 'protected synthetic content', password);
-  for (const revealProof of [undefined, 'x'.repeat(43)]) {
+  for (const authKey of [undefined, 'x'.repeat(43)]) {
     const response = await request.post('/api/secrets/reveal', {
-      data: { token, revealProof },
+      data: { token, authKey },
       headers: { origin: new URL(share).origin },
     });
     expect(response.status()).toBe(403);
@@ -158,6 +166,59 @@ test('missing fragment never sends reveal and cancellation prevents reading', as
   await expect(page.locator('#open-form')).toHaveCount(0);
 });
 
+test('a tampered fragment key is refused without consuming, and the original link still opens', async ({ page }) => {
+  const { share, control } = await create(page, 'synthetic tamper content');
+  const url = new URL(share);
+  const key = url.hash.slice(1);
+  // Swap the first character for another valid one: still a well formed key.
+  url.hash = (key[0] === 'A' ? 'B' : 'A') + key.slice(1);
+  await page.goto(url.toString());
+  await page.locator('#open-submit').click();
+  await expect(page.locator('#open-status')).toHaveText('Key does not match. The secret was not consumed.');
+  await expect(page.locator('#open-form')).toBeVisible();
+  const check = await page.context().newPage();
+  await check.goto(control);
+  await expect(check.locator('#control-state-pending')).toBeVisible();
+  await check.close();
+  await page.goto('about:blank');
+  await page.goto(share);
+  await page.locator('#open-submit').click();
+  await expect(page.locator('#secret-text')).toHaveText('synthetic tamper content');
+});
+
+test('a reload loses the key but says the secret was not consumed', async ({ page }) => {
+  const { share, control } = await create(page, 'synthetic reload content');
+  let reveals = 0;
+  page.on('request', (req) => { if (req.url().endsWith('/api/secrets/reveal')) reveals++; });
+  await page.goto(share);
+  await expect(page).not.toHaveURL(/#/);
+  await page.reload();
+  await page.locator('#open-submit').click();
+  await expect(page.locator('#open-status')).toHaveText(
+    'Key missing from the address. The secret was not consumed: open the original link again.',
+  );
+  expect(reveals).toBe(0);
+  await page.getByRole('link', { name: 'Italian', exact: true }).click();
+  await expect(page.locator('html')).toHaveAttribute('lang', 'it');
+  await page.locator('#open-submit').click();
+  await expect(page.locator('#open-status')).toHaveText(
+    'Chiave assente dall’indirizzo. Il segreto non è stato consumato: riapri il link originale.',
+  );
+  await page.goto(control);
+  await expect(page.locator('#control-state-pending')).toBeVisible();
+});
+
+test('rejects a password that only exceeds the limit after NFKC normalisation', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('#secret').fill('synthetic nfkc content');
+  // U+FDFA expands to 18 characters under NFKC: 30 of them are 540 after normalisation.
+  await page.locator('#create-password').fill('\uFDFA'.repeat(30));
+  await page.locator('#create-submit').click();
+  await expect(page.locator('#create-status')).toHaveText('Password too long');
+  await expect(page.locator('#create-password')).toHaveAttribute('aria-invalid', 'true');
+  expect(await pool.query('SELECT 1 FROM secrets').then((result) => result.rowCount)).toBe(0);
+});
+
 test('expired records cannot be read through the real HTTP server', async ({ page, request }) => {
   const { share, control, token } = await create(page);
   await pool.query("UPDATE secrets SET expires_at = now() - interval '1 second' WHERE token_hash = $1",
@@ -171,9 +232,10 @@ test('expired records cannot be read through the real HTTP server', async ({ pag
 });
 
 test('exactly one HTTP reveal succeeds under concurrency', async ({ page, request }) => {
-  const { token, control } = await create(page);
+  const { share, token, control } = await create(page);
+  const authKey = await authKeyFor(share);
   const responses = await Promise.all(Array.from({ length: 8 }, () =>
-    request.post('/api/secrets/reveal', { data: { token } })));
+    request.post('/api/secrets/reveal', { data: { token, authKey } })));
   expect(responses.filter((response) => response.status() === 200)).toHaveLength(1);
   expect(responses.filter((response) => response.status() === 404)).toHaveLength(7);
   await page.goto(control);
@@ -350,6 +412,38 @@ test('the QR code and the control instants are localised in Italian', async ({ p
   await page.locator('#control-cancel').click();
   await expect(page.locator('#control-state-cancelled')).toBeVisible();
   expect(await terms()).toEqual(['scadenza', 'chiuso']);
+});
+
+test('an unknown path renders the styled 404 page in both languages without CSP violations', async ({ page }) => {
+  const violations: string[] = [];
+  page.on('console', (message) => {
+    // The document's own 404 status is logged as a failed resource; only policy
+    // reports count here.
+    const text = message.text();
+    if (/csp-violation|content security policy/i.test(text)) violations.push(text);
+  });
+  await page.addInitScript(() => {
+    document.addEventListener('securitypolicyviolation', (event) => {
+      console.error(`csp-violation ${event.violatedDirective}`);
+    });
+  });
+
+  const response = await page.goto('/no-such-page');
+  expect(response?.status()).toBe(404);
+  const headers = response!.headers();
+  expect(headers['cache-control']).toContain('no-store');
+  expect(headers['x-robots-tag']).toContain('noindex');
+  expect(headers['content-security-policy']).toContain('style-src');
+  await expect(page.getByRole('heading', { level: 1, name: 'Page not found' })).toBeVisible();
+  // The global stylesheet applied: the dark background is not the browser default.
+  expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).not.toBe('rgba(0, 0, 0, 0)');
+  await expect(page.getByRole('link', { name: 'Create a new secret' })).toHaveAttribute('href', '/');
+
+  await page.getByRole('link', { name: 'Italian', exact: true }).click();
+  await expect(page).toHaveURL(/\/no-such-page$/);
+  await expect(page.locator('html')).toHaveAttribute('lang', 'it');
+  await expect(page.getByRole('heading', { level: 1, name: 'Pagina non trovata' })).toBeVisible();
+  expect(violations).toEqual([]);
 });
 
 test('HTTP protection rejects cross-origin requests, caps creation quota and hardens readiness', async ({ request }) => {

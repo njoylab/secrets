@@ -10,6 +10,7 @@ import {
   generateToken,
   hashToken,
   isValidTokenShape,
+  keyAuthHash,
 } from '../src/lib/crypto.ts';
 
 const KEY = randomBytes(32);
@@ -138,5 +139,21 @@ describe('encryptSecret / decryptSecret', () => {
     expect(() => decryptSecret(Buffer.from('short').toString('base64url'), KEY)).toThrow(
       'Ciphertext payload is too short',
     );
+  });
+});
+
+describe('keyAuthHash', () => {
+  const authHash = createHash('sha256').update('auth key bytes').digest();
+
+  it('is deterministic per deployment key and keeps the 64-hex shape', () => {
+    expect(keyAuthHash(authHash, KEY)).toMatch(/^[0-9a-f]{64}$/);
+    expect(keyAuthHash(authHash, KEY)).toBe(keyAuthHash(authHash, Buffer.from(KEY)));
+    expect(keyAuthHash(authHash, KEY)).not.toBe(authHash.toString('hex'));
+  });
+
+  it('depends on the deployment key and on the input', () => {
+    expect(keyAuthHash(authHash, KEY)).not.toBe(keyAuthHash(authHash, OTHER_KEY));
+    const other = createHash('sha256').update('other auth key').digest();
+    expect(keyAuthHash(authHash, KEY)).not.toBe(keyAuthHash(other, KEY));
   });
 });

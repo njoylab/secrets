@@ -10,14 +10,15 @@ import { hashToken } from '../src/lib/crypto.ts';
 import { withClient } from '../src/lib/db.ts';
 import { resetConfigCache } from '../src/lib/env.ts';
 import { cancelSecret, createSecret, readControlStatus, revealSecret } from '../src/lib/secrets.ts';
+import { deriveSecretKeys, encodeAuthKey } from '../src/lib/content-crypto.ts';
 import {
   countReceipts,
   countSecrets,
-  dummyVerifier,
-  DUMMY_REVEAL_PROOF,
-  DUMMY_REVEAL_PROOF_HASH,
+  TEST_AUTH_HASH,
+  TEST_AUTH_KEY,
   fetchReceipt,
   resetEnv,
+  sealedPasswordSecret,
   sealedSecret,
 } from './helpers.ts';
 
@@ -32,10 +33,10 @@ function countWinners(results: ReadonlyArray<{ readonly ok: boolean }>): number 
 describe('parallel revealSecret', () => {
   it('gives the content to exactly one of eight concurrent reveals', async () => {
     const { payload } = await sealedSecret('read me once');
-    const created = await createSecret({ payload, expiresIn: '7d' });
+    const created = await createSecret({ authHash: TEST_AUTH_HASH, payload, expiresIn: '7d' });
 
     const results = await Promise.all(
-      Array.from({ length: 8 }, () => revealSecret(created.token)),
+      Array.from({ length: 8 }, () => revealSecret(created.token, TEST_AUTH_KEY)),
     );
 
     const winners = results.filter((result) => result.ok);
@@ -47,14 +48,14 @@ describe('parallel revealSecret', () => {
     if (!winners[0]?.ok) throw new Error('no winner');
     expect(winners[0].payload).toBe(payload);
     expect(await countSecrets()).toBe(0);
-    expect(await revealSecret(created.token)).toEqual({ ok: false, reason: 'unavailable' });
+    expect(await revealSecret(created.token, TEST_AUTH_KEY)).toEqual({ ok: false, reason: 'unavailable' });
   });
 
   it('holds with twenty concurrent reveals', async () => {
-    const created = await createSecret({ payload: (await sealedSecret('single use')).payload, expiresIn: '7d' });
+    const created = await createSecret({ authHash: TEST_AUTH_HASH, payload: (await sealedSecret('single use')).payload, expiresIn: '7d' });
 
     const results = await Promise.all(
-      Array.from({ length: 20 }, () => revealSecret(created.token)),
+      Array.from({ length: 20 }, () => revealSecret(created.token, TEST_AUTH_KEY)),
     );
 
     expect(countWinners(results)).toBe(1);
@@ -63,13 +64,13 @@ describe('parallel revealSecret', () => {
 
   it('gives the content to exactly one of three concurrent reveals on a protected secret', async () => {
     const created = await createSecret({
+      authHash: TEST_AUTH_HASH,
       payload: (await sealedSecret('protected single use')).payload,
-      verifier: await dummyVerifier(),
-      revealProofHash: DUMMY_REVEAL_PROOF_HASH,
+      passwordProtected: true,
       expiresIn: '7d',
     });
 
-    const results = await Promise.all(Array.from({ length: 3 }, () => revealSecret(created.token, DUMMY_REVEAL_PROOF)));
+    const results = await Promise.all(Array.from({ length: 3 }, () => revealSecret(created.token, TEST_AUTH_KEY)));
 
     expect(countWinners(results)).toBe(1);
     for (const loser of results.filter((result) => !result.ok)) {
@@ -78,17 +79,43 @@ describe('parallel revealSecret', () => {
     expect(await countSecrets()).toBe(0);
   });
 
+  it('lets one correct password win while concurrent wrong ones consume nothing', async () => {
+    const sealed = await sealedPasswordSecret('raced with guesses', 'right password');
+    const created = await createSecret({
+      payload: sealed.payload,
+      authHash: sealed.authHash,
+      passwordProtected: true,
+      expiresIn: '7d',
+    });
+    const wrong = encodeAuthKey((await deriveSecretKeys(sealed.key, 'wrong password', sealed.salt)).authKey);
+
+    const results = await Promise.all(
+      Array.from({ length: 12 }, (_, index) => revealSecret(created.token, index % 3 === 0 ? sealed.authKey : wrong)),
+    );
+
+    expect(results.filter((result) => result.ok)).toEqual([{ ok: true, payload: sealed.payload }]);
+    for (const [index, result] of results.entries()) {
+      if (result.ok) continue;
+      // A right key that lost the race finds the row gone. A wrong key is
+      // refused, or finds the row gone if it arrived after the winner.
+      if (index % 3 === 0) expect(result.reason).toBe('unavailable');
+      else expect(['bad_password', 'unavailable']).toContain(result.reason);
+    }
+    expect(await countSecrets()).toBe(0);
+    expect(await countReceipts()).toBe(1);
+  });
+
   it('does not let a winning reveal of a different secret be affected by a loser', async () => {
     const firstPayload = (await sealedSecret('first secret')).payload;
     const secondPayload = (await sealedSecret('second secret')).payload;
-    const first = await createSecret({ payload: firstPayload, expiresIn: '7d' });
-    const second = await createSecret({ payload: secondPayload, expiresIn: '7d' });
+    const first = await createSecret({ authHash: TEST_AUTH_HASH, payload: firstPayload, expiresIn: '7d' });
+    const second = await createSecret({ authHash: TEST_AUTH_HASH, payload: secondPayload, expiresIn: '7d' });
 
     const results = await Promise.all([
-      revealSecret(first.token),
-      revealSecret(second.token),
-      revealSecret(first.token),
-      revealSecret(second.token),
+      revealSecret(first.token, TEST_AUTH_KEY),
+      revealSecret(second.token, TEST_AUTH_KEY),
+      revealSecret(first.token, TEST_AUTH_KEY),
+      revealSecret(second.token, TEST_AUTH_KEY),
     ]);
 
     const winners = results.filter((result) => result.ok);
@@ -104,10 +131,10 @@ describe('parallel revealSecret', () => {
     // deletes of N callers that all decrypted successfully. The invariant is
     // unchanged: one winner, and the row exists for nobody afterwards.
     const { payload } = await sealedSecret('decrypted before deleted');
-    const created = await createSecret({ payload, expiresIn: '7d' });
+    const created = await createSecret({ authHash: TEST_AUTH_HASH, payload, expiresIn: '7d' });
 
     const results = await Promise.all(
-      Array.from({ length: 20 }, () => revealSecret(created.token)),
+      Array.from({ length: 20 }, () => revealSecret(created.token, TEST_AUTH_KEY)),
     );
 
     const winners = results.filter((result) => result.ok);
@@ -124,12 +151,12 @@ describe('parallel revealSecret', () => {
     // readable again once the key is restored.
     const originalKey = process.env.SECRET_ENCRYPTION_KEY;
     const { payload } = await sealedSecret('key comes back');
-    const created = await createSecret({ payload, expiresIn: '7d' });
+    const created = await createSecret({ authHash: TEST_AUTH_HASH, payload, expiresIn: '7d' });
 
     process.env.SECRET_ENCRYPTION_KEY = Buffer.alloc(32, 5).toString('base64url');
     resetConfigCache();
     try {
-      const results = await Promise.all(Array.from({ length: 10 }, () => revealSecret(created.token)));
+      const results = await Promise.all(Array.from({ length: 10 }, () => revealSecret(created.token, TEST_AUTH_KEY)));
       for (const result of results) expect(result).toEqual({ ok: false, reason: 'undecryptable' });
       expect(await countSecrets()).toBe(1);
     } finally {
@@ -137,7 +164,7 @@ describe('parallel revealSecret', () => {
       resetConfigCache();
     }
 
-    const results = await Promise.all(Array.from({ length: 10 }, () => revealSecret(created.token)));
+    const results = await Promise.all(Array.from({ length: 10 }, () => revealSecret(created.token, TEST_AUTH_KEY)));
     expect(results.filter((result) => result.ok)).toHaveLength(1);
     expect(await countSecrets()).toBe(0);
   });
@@ -145,7 +172,7 @@ describe('parallel revealSecret', () => {
 
 describe('raw DELETE ... RETURNING across two pool clients', () => {
   it('lets the database hand the row to a single client', async () => {
-    const created = await createSecret({ payload: (await sealedSecret('raw race')).payload, expiresIn: '7d' });
+    const created = await createSecret({ authHash: TEST_AUTH_HASH, payload: (await sealedSecret('raw race')).payload, expiresIn: '7d' });
     const tokenHash = hashToken(created.token);
     const statement = 'DELETE FROM secrets WHERE token_hash = $1 RETURNING ciphertext';
 
@@ -162,7 +189,7 @@ describe('raw DELETE ... RETURNING across two pool clients', () => {
   });
 
   it('deletes nothing when the conditional predicate no longer holds', async () => {
-    const created = await createSecret({ payload: (await sealedSecret('already expired')).payload, expiresIn: '7d' });
+    const created = await createSecret({ authHash: TEST_AUTH_HASH, payload: (await sealedSecret('already expired')).payload, expiresIn: '7d' });
     const tokenHash = hashToken(created.token);
     await withClient((client) =>
       client.query(`UPDATE secrets SET expires_at = now() - interval '1 second' WHERE token_hash = $1`, [
@@ -186,6 +213,7 @@ describe('concurrent creation', () => {
     const created = await Promise.all(
       Array.from({ length: 20 }, async (_unused, index) =>
         createSecret({
+          authHash: TEST_AUTH_HASH,
           payload: (await sealedSecret(`payload number ${index}`)).payload,
           expiresIn: '7d',
         }),
@@ -197,7 +225,7 @@ describe('concurrent creation', () => {
     expect(new Set(created.map((entry) => entry.controlToken)).size).toBe(20);
     expect(await countSecrets()).toBe(20);
 
-    const revealed = await Promise.all(created.map((entry) => revealSecret(entry.token)));
+    const revealed = await Promise.all(created.map((entry) => revealSecret(entry.token, TEST_AUTH_KEY)));
     expect(countWinners(revealed)).toBe(20);
     expect(await countSecrets()).toBe(0);
   });
@@ -212,11 +240,11 @@ describe('concurrent cancel against reveal', () => {
     for (let round = 0; round < 12; round += 1) {
       await resetEnv();
       const { payload } = await sealedSecret(`race ${round}`);
-      const created = await createSecret({ payload, expiresIn: '7d' });
+      const created = await createSecret({ authHash: TEST_AUTH_HASH, payload, expiresIn: '7d' });
 
       const [cancelled, revealed] = await Promise.all([
         cancelSecret(created.controlToken),
-        revealSecret(created.token),
+        revealSecret(created.token, TEST_AUTH_KEY),
       ]);
 
       // One of the two must have removed the row, and it wrote exactly one receipt.
@@ -244,12 +272,12 @@ describe('concurrent cancel against reveal', () => {
 
   it('reports the winning state when many cancels race a reveal', async () => {
     const { payload } = await sealedSecret('crowded race');
-    const created = await createSecret({ payload, expiresIn: '7d' });
+    const created = await createSecret({ authHash: TEST_AUTH_HASH, payload, expiresIn: '7d' });
 
     const [firstCancel, secondCancel, revealed, thirdCancel] = await Promise.all([
       cancelSecret(created.controlToken),
       cancelSecret(created.controlToken),
-      revealSecret(created.token),
+      revealSecret(created.token, TEST_AUTH_KEY),
       cancelSecret(created.controlToken),
     ]);
 
@@ -277,13 +305,13 @@ describe('concurrent cancel against reveal', () => {
 
   it('never writes two receipts for the same control token', async () => {
     const { payload } = await sealedSecret('one receipt');
-    const created = await createSecret({ payload, expiresIn: '7d' });
+    const created = await createSecret({ authHash: TEST_AUTH_HASH, payload, expiresIn: '7d' });
 
     await Promise.all([
       cancelSecret(created.controlToken),
       cancelSecret(created.controlToken),
       cancelSecret(created.controlToken),
-      revealSecret(created.token),
+      revealSecret(created.token, TEST_AUTH_KEY),
     ]);
 
     // A second insert would have violated the primary key and rolled the row back.

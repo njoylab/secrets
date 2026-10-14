@@ -1,11 +1,13 @@
 /**
- * Periodic maintenance: `purgeExpired` is the in-process twin of
- * `scripts/cleanup.mjs`, and the same invariants must hold for both.
+ * Periodic maintenance. `purgeExpired` here runs `src/lib/cleanup.mjs`, the very
+ * module `scripts/cleanup.mjs` calls, and one test runs the script itself.
  */
+import { spawnSync } from 'node:child_process';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { hashToken } from '../src/lib/crypto.ts';
 import { query } from '../src/lib/db.ts';
-import { cancelSecret, createSecret, purgeExpired, readControlStatus, revealSecret } from '../src/lib/secrets.ts';
+import { RECEIPT_RETENTION_DAYS } from '../src/lib/cleanup.mjs';
+import { cancelSecret, createSecret, readControlStatus, revealSecret } from '../src/lib/secrets.ts';
 import {
   DEFAULT_CLEANUP_KEEP_COUNTER_SECONDS,
   DEFAULT_RATE_LIMIT_CREATE_WINDOW_SECONDS,
@@ -18,9 +20,8 @@ import {
   countReceipts,
   countSecrets,
   deleteReceipt,
-  dummyVerifier,
-  DUMMY_REVEAL_PROOF,
-  DUMMY_REVEAL_PROOF_HASH,
+  TEST_AUTH_HASH,
+  TEST_AUTH_KEY,
   fetchRateLimitRows,
   fetchReceipt,
   fetchReceiptJson,
@@ -28,6 +29,8 @@ import {
   forceExpire,
   forceReceiptPurge,
   insertRateLimitRow,
+  purgeExpired,
+  purgeWithReport,
   resetEnv,
   secretRowJson,
   sealedSecret,
@@ -44,19 +47,21 @@ beforeEach(async () => {
 describe('purgeExpired: secrets', () => {
   it('removes every expired secret and keeps every live one', async () => {
     const expiredShort = await createSecret({
+      authHash: TEST_AUTH_HASH,
       payload: (await sealedSecret('expired short')).payload,
       expiresIn: '1d',
     });
     const expiredLong = await createSecret({
+      authHash: TEST_AUTH_HASH,
       payload: (await sealedSecret('expired long')).payload,
       expiresIn: '30d',
     });
-    const live = await createSecret({ payload: (await sealedSecret('live')).payload, expiresIn: '30d' });
+    const live = await createSecret({ authHash: TEST_AUTH_HASH, payload: (await sealedSecret('live')).payload, expiresIn: '30d' });
     const liveLocked = await createSecret({
+      authHash: TEST_AUTH_HASH,
       payload: (await sealedSecret('live locked')).payload,
       expiresIn: '7d',
-      verifier: await dummyVerifier(),
-      revealProofHash: DUMMY_REVEAL_PROOF_HASH,
+      passwordProtected: true,
     });
     await forceExpire(expiredShort.token);
     await setExpiresInSeconds(expiredLong.token, -1);
@@ -73,16 +78,17 @@ describe('purgeExpired: secrets', () => {
 
   it('leaves a live row byte for byte identical', async () => {
     const { payload } = await sealedSecret('untouched');
-    const live = await createSecret({ payload, expiresIn: '7d', verifier: await dummyVerifier(), revealProofHash: DUMMY_REVEAL_PROOF_HASH });
+    const live = await createSecret({ authHash: TEST_AUTH_HASH, payload, expiresIn: '7d', passwordProtected: true });
     const before = await secretRowJson(live.token);
 
     expect(await purgeExpired(HOUR)).toEqual({ secrets: 0, receipts: 0, counters: 0 });
     expect(await secretRowJson(live.token)).toBe(before);
-    expect(await revealSecret(live.token, DUMMY_REVEAL_PROOF)).toEqual({ ok: true, payload });
+    expect(await revealSecret(live.token, TEST_AUTH_KEY)).toEqual({ ok: true, payload });
   });
 
   it('treats an expiry exactly at now as expired, in SQL', async () => {
     const boundary = await createSecret({
+      authHash: TEST_AUTH_HASH,
       payload: (await sealedSecret('boundary')).payload,
       expiresIn: '1d',
     });
@@ -95,7 +101,7 @@ describe('purgeExpired: secrets', () => {
   });
 
   it('is idempotent: a second run finds nothing left to remove', async () => {
-    const expired = await createSecret({ payload: (await sealedSecret('gone')).payload, expiresIn: '1d' });
+    const expired = await createSecret({ authHash: TEST_AUTH_HASH, payload: (await sealedSecret('gone')).payload, expiresIn: '1d' });
     await forceExpire(expired.token);
 
     // The first run writes the receipt, the second finds the row already gone and
@@ -107,9 +113,43 @@ describe('purgeExpired: secrets', () => {
   });
 });
 
+describe('cleanup script', () => {
+  it('reports the receipts it wrote alongside what it deleted', async () => {
+    const expired = await createSecret({ authHash: TEST_AUTH_HASH, payload: (await sealedSecret('reported')).payload, expiresIn: '1d' });
+    await forceExpire(expired.token);
+    await insertRateLimitRow('create', 'idle-subject', 2 * HOUR, 1);
+
+    expect(await purgeWithReport(HOUR)).toEqual({ secrets: 1, receiptsWritten: 1, receipts: 0, counters: 1 });
+    expect((await fetchReceipt(expired.controlToken))?.state).toBe('expired');
+  });
+
+  it('shares the receipt retention with the application', async () => {
+    const { RECEIPT_RETENTION_DAYS: appRetention } = await import('../src/lib/secrets.ts');
+    expect(appRetention).toBe(RECEIPT_RETENTION_DAYS);
+    expect(RECEIPT_RETENTION_DAYS).toBe(7);
+  });
+
+  it('runs end to end as a Node script against the test database', async () => {
+    const expired = await createSecret({ authHash: TEST_AUTH_HASH, payload: (await sealedSecret('scripted')).payload, expiresIn: '1d' });
+    const live = await createSecret({ authHash: TEST_AUTH_HASH, payload: (await sealedSecret('kept')).payload, expiresIn: '7d' });
+    await forceExpire(expired.token);
+
+    const run = spawnSync(process.execPath, ['scripts/cleanup.mjs'], {
+      env: { PATH: process.env.PATH ?? '', DATABASE_URL: process.env.DATABASE_URL ?? '' },
+      encoding: 'utf8',
+    });
+    expect(run.stderr).toBe('');
+    expect(run.status).toBe(0);
+    expect(run.stdout).toContain('removed 1 expired secret(s), wrote 1 receipt(s)');
+    expect(await fetchSecretRow(expired.token)).toBeUndefined();
+    expect(await fetchSecretRow(live.token)).toBeDefined();
+    expect((await readControlStatus(expired.controlToken))?.state).toBe('expired');
+  });
+});
+
 describe('purgeExpired: receipts', () => {
   it('writes an expired receipt in the same statement that removes the row', async () => {
-    const created = await createSecret({ payload: (await sealedSecret('expiring')).payload, expiresIn: '7d' });
+    const created = await createSecret({ authHash: TEST_AUTH_HASH, payload: (await sealedSecret('expiring')).payload, expiresIn: '7d' });
     await forceExpire(created.token);
 
     expect(await countReceipts()).toBe(0);
@@ -121,7 +161,7 @@ describe('purgeExpired: receipts', () => {
   });
 
   it('keeps an expired receipt for at least a week after the secret closed', async () => {
-    const created = await createSecret({ payload: (await sealedSecret('recent')).payload, expiresIn: '7d' });
+    const created = await createSecret({ authHash: TEST_AUTH_HASH, payload: (await sealedSecret('recent')).payload, expiresIn: '7d' });
     await forceExpire(created.token);
     await purgeExpired(HOUR);
 
@@ -135,7 +175,7 @@ describe('purgeExpired: receipts', () => {
   it('never shortens a receipt to less than the secret own lifetime', async () => {
     // A secret that expired a moment ago is still inside its own window, so the
     // receipt must outlive it even if the seven days would have elapsed sooner.
-    const created = await createSecret({ payload: (await sealedSecret('barely expired')).payload, expiresIn: '1h' });
+    const created = await createSecret({ authHash: TEST_AUTH_HASH, payload: (await sealedSecret('barely expired')).payload, expiresIn: '1h' });
     const row = await fetchSecretRow(created.token);
     if (!row) throw new Error('secret row missing');
     await query('UPDATE secrets SET expires_at = now() - interval \'1 month\' WHERE token_hash = $1', [
@@ -150,8 +190,8 @@ describe('purgeExpired: receipts', () => {
   });
 
   it('drops a spent receipt only after its retention', async () => {
-    const created = await createSecret({ payload: (await sealedSecret('read once')).payload, expiresIn: '7d' });
-    await revealSecret(created.token);
+    const created = await createSecret({ authHash: TEST_AUTH_HASH, payload: (await sealedSecret('read once')).payload, expiresIn: '7d' });
+    await revealSecret(created.token, TEST_AUTH_KEY);
 
     expect(await countReceipts()).toBe(1);
     expect(await purgeExpired(0)).toEqual({ secrets: 0, receipts: 0, counters: 0 });
@@ -165,7 +205,7 @@ describe('purgeExpired: receipts', () => {
   });
 
   it('leaves cancelled receipts alone, because the secret is gone anyway', async () => {
-    const created = await createSecret({ payload: (await sealedSecret('cancelled')).payload, expiresIn: '7d' });
+    const created = await createSecret({ authHash: TEST_AUTH_HASH, payload: (await sealedSecret('cancelled')).payload, expiresIn: '7d' });
     await cancelSecret(created.controlToken);
     await forceReceiptPurge(created.controlToken);
 
@@ -178,6 +218,7 @@ describe('purgeExpired: receipts', () => {
     // a maintenance job must still not fail wholesale if one is somehow already in
     // secret_receipts: the insert is skipped and the row is removed all the same.
     const created = await createSecret({
+      authHash: TEST_AUTH_HASH,
       payload: (await sealedSecret('already receipted')).payload,
       expiresIn: '1d',
     });
@@ -197,7 +238,7 @@ describe('purgeExpired: receipts', () => {
 
   it('never puts a payload, a password or a token in a receipt', async () => {
     const { payload } = await sealedSecret('receipt hygiene');
-    const created = await createSecret({ payload, expiresIn: '1d', verifier: await dummyVerifier(), revealProofHash: DUMMY_REVEAL_PROOF_HASH });
+    const created = await createSecret({ authHash: TEST_AUTH_HASH, payload, expiresIn: '1d', passwordProtected: true });
     await forceExpire(created.token);
     await purgeExpired(HOUR);
 
@@ -210,7 +251,7 @@ describe('purgeExpired: receipts', () => {
   });
 
   it('recovers the same unavailable answer a removed receipt would give', async () => {
-    const created = await createSecret({ payload: (await sealedSecret('forgotten')).payload, expiresIn: '1d' });
+    const created = await createSecret({ authHash: TEST_AUTH_HASH, payload: (await sealedSecret('forgotten')).payload, expiresIn: '1d' });
     await forceExpire(created.token);
     await purgeExpired(HOUR);
     expect((await readControlStatus(created.controlToken))?.state).toBe('expired');

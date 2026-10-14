@@ -14,8 +14,11 @@ import {
   CONTENT_TAG_BYTES,
   PASSWORD_KDF_ITERATIONS,
   PASSWORD_MAX_LENGTH,
-  createPasswordVerifier,
-  openPasswordVerifier,
+  decodeAuthKey,
+  deriveSecretKeys,
+  encodeAuthKey,
+  hashAuthKey,
+  normalizedPasswordLength,
   decodeBase64Url,
   decodeContentKey,
   decodeShareFragment,
@@ -25,7 +28,6 @@ import {
   encryptPayload,
   generateContentKey,
   generatePasswordSalt,
-  derivePasswordKey,
   decryptPayload,
   isSealedEnvelope,
   controlUrl,
@@ -318,25 +320,59 @@ describe('share links', () => {
   });
 });
 
-describe('password-derived content key', () => {
-  it('releases an independent authorization proof only after decrypting the password verifier', async () => {
+describe('derived content and auth keys', () => {
+  it('derives two independent keys from the fragment key alone', async () => {
+    const key = generateContentKey();
+    const { contentKey, authKey } = await deriveSecretKeys(key, null, null);
+    expect(contentKey.byteLength).toBe(32);
+    expect(authKey.byteLength).toBe(32);
+    expect(contentKey).not.toEqual(authKey);
+    expect(contentKey).not.toEqual(key);
+    expect(authKey).not.toEqual(key);
+    // Deterministic: the reader derives the same pair from the same link.
+    expect(await deriveSecretKeys(key, null, null)).toEqual({ contentKey, authKey });
+    // The auth key cannot open the payload, and neither can the raw fragment key.
+    const payload = await encryptPayload(SECRET, contentKey);
+    expect(await decryptPayload(payload, contentKey)).toBe(SECRET);
+    await expect(decryptPayload(payload, authKey)).rejects.toThrow();
+    await expect(decryptPayload(payload, key)).rejects.toThrow();
+  });
+
+  it('requires both the fragment key and the password', async () => {
     const key = generateContentKey();
     const salt = generatePasswordSalt();
-    const derived = await derivePasswordKey(key, 'correct horse', salt);
-    const { verifier, revealProofHash } = await createPasswordVerifier(derived);
-    const proof = await openPasswordVerifier(verifier, derived);
-    expect(proof).toMatch(/^[A-Za-z0-9_-]{43}$/);
-    expect(createHash('sha256').update(proof!).digest('hex')).toBe(revealProofHash);
-    expect(proof).not.toBe(encodeContentKey(key));
-    expect(proof).not.toBe(encodeContentKey(derived));
-    await expect(openPasswordVerifier(verifier, key)).rejects.toThrow();
-    await expect(openPasswordVerifier(verifier, await derivePasswordKey(key, 'wrong horse', salt))).rejects.toThrow();
-    const unsupported = await encryptPayload('echovalue-secrets-verifier-v1', derived);
-    await expect(openPasswordVerifier(unsupported, derived)).rejects.toThrow();
-    for (const text of ['unexpected', 'echovalue-secrets-verifier-v2:short']) {
-      await expect(openPasswordVerifier(await encryptPayload(text, derived), derived)).rejects.toThrow();
+    const right = await deriveSecretKeys(key, 'correct horse', salt);
+    const wrongPassword = await deriveSecretKeys(key, 'wrong horse', salt);
+    const noPassword = await deriveSecretKeys(key, null, null);
+    const otherKey = await deriveSecretKeys(generateContentKey(), 'correct horse', salt);
+    const otherSalt = await deriveSecretKeys(key, 'correct horse', generatePasswordSalt());
+
+    for (const other of [wrongPassword, noPassword, otherKey, otherSalt]) {
+      expect(other.authKey).not.toEqual(right.authKey);
+      expect(other.contentKey).not.toEqual(right.contentKey);
     }
+    expect(right.contentKey).not.toEqual(right.authKey);
+    const payload = await encryptPayload('sealed', right.contentKey);
+    expect(await decryptPayload(payload, right.contentKey)).toBe('sealed');
+    await expect(decryptPayload(payload, wrongPassword.contentKey)).rejects.toThrow();
+    await expect(decryptPayload(payload, noPassword.contentKey)).rejects.toThrow();
   });
+
+  it('normalises the password to NFKC', async () => {
+    const key = generateContentKey();
+    const salt = generatePasswordSalt();
+    expect(await deriveSecretKeys(key, 'é', salt)).toEqual(await deriveSecretKeys(key, 'é', salt));
+  });
+
+  it('refuses a password without a salt, a salt without a password, and bad sizes', async () => {
+    const key = generateContentKey();
+    const salt = generatePasswordSalt();
+    await expect(deriveSecretKeys(key, 'pw', null)).rejects.toThrow();
+    await expect(deriveSecretKeys(key, null, salt)).rejects.toThrow();
+    await expect(deriveSecretKeys(key.subarray(0, 31), null, null)).rejects.toThrow();
+    await expect(deriveSecretKeys(key, 'pw', salt.subarray(0, 15))).rejects.toThrow();
+  });
+
   it('uses the OWASP PBKDF2 iteration floor', () => {
     expect(PASSWORD_KDF_ITERATIONS).toBeGreaterThanOrEqual(600_000);
     expect(PASSWORD_MAX_LENGTH).toBe(512);
@@ -345,26 +381,33 @@ describe('password-derived content key', () => {
   it('rejects an empty or oversized password before deriving', async () => {
     const key = generateContentKey();
     const salt = generatePasswordSalt();
-    await expect(derivePasswordKey(key, '', salt)).rejects.toThrow();
-    await expect(derivePasswordKey(key, 'p'.repeat(PASSWORD_MAX_LENGTH + 1), salt)).rejects.toThrow();
+    await expect(deriveSecretKeys(key, '', salt)).rejects.toThrow();
+    await expect(deriveSecretKeys(key, 'p'.repeat(PASSWORD_MAX_LENGTH + 1), salt)).rejects.toThrow();
   });
 
-  it('requires both the fragment key and the password', async () => {
-    const key = generateContentKey();
-    const salt = generatePasswordSalt();
-    const derived = await derivePasswordKey(key, 'correct horse', salt);
-    const payload = await encryptPayload('sealed', derived);
-    const { verifier } = await createPasswordVerifier(derived);
+  it('measures the password length after NFKC, as the derivation does', async () => {
+    // U+FDFA expands to 18 characters under NFKC, so a short input can exceed the limit.
+    const expanding = 'ﷺ'.repeat(Math.ceil(PASSWORD_MAX_LENGTH / 18) + 1);
+    expect(expanding.length).toBeLessThan(PASSWORD_MAX_LENGTH);
+    expect(normalizedPasswordLength(expanding)).toBeGreaterThan(PASSWORD_MAX_LENGTH);
+    await expect(deriveSecretKeys(generateContentKey(), expanding, generatePasswordSalt())).rejects.toThrow();
+    expect(normalizedPasswordLength('p'.repeat(PASSWORD_MAX_LENGTH))).toBe(PASSWORD_MAX_LENGTH);
+  });
+});
 
-    expect(await decryptPayload(payload, derived)).toBe('sealed');
-    expect(await openPasswordVerifier(verifier, derived)).toMatch(/^[A-Za-z0-9_-]{43}$/);
-    await expect(decryptPayload(payload, key)).rejects.toThrow();
+describe('auth key transport', () => {
+  it('round-trips as 43 characters and hashes to the SHA-256 of its bytes', async () => {
+    const { authKey } = await deriveSecretKeys(generateContentKey(), null, null);
+    const text = encodeAuthKey(authKey);
+    expect(text).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(decodeAuthKey(text)).toEqual(authKey);
+    expect(await hashAuthKey(authKey)).toBe(createHash('sha256').update(authKey).digest('hex'));
+  });
 
-    const other = await derivePasswordKey(key, 'wrong horse', salt);
-    await expect(decryptPayload(verifier, other)).rejects.toThrow();
-
-    const equivalent = await derivePasswordKey(key, 'e\u0301', salt);
-    const composed = await derivePasswordKey(key, '\u00E9', salt);
-    expect(equivalent).toEqual(composed);
+  it('refuses anything that is not a canonical 32 byte key', () => {
+    const text = encodeAuthKey(new Uint8Array(32).fill(1));
+    for (const bad of [undefined, null, 42, '', text.slice(1), `${text}A`, `${text.slice(0, 42)}=`, `${text.slice(0, 42)}+`]) {
+      expect(decodeAuthKey(bad)).toBeNull();
+    }
   });
 });

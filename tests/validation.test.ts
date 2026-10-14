@@ -15,7 +15,6 @@ import {
   MAX_PAYLOAD_BYTES,
   MAX_REVEAL_BODY_BYTES,
   MAX_SECRET_BYTES,
-  MAX_VERIFIER_BYTES,
   RECEIPT_RETENTION_DAYS,
   createSecret,
   revealSecret,
@@ -23,9 +22,9 @@ import {
 } from '../src/lib/secrets.ts';
 import {
   captureSecretError,
-  dummyVerifier,
-  DUMMY_REVEAL_PROOF,
-  DUMMY_REVEAL_PROOF_HASH,
+  expectedStoredAuthHash,
+  TEST_AUTH_HASH,
+  TEST_AUTH_KEY,
   fetchSecretRow,
   payloadOfBytes,
   resetEnv,
@@ -46,7 +45,7 @@ beforeEach(async () => {
 
 describe('payload size', () => {
   it('rejects an empty payload with payloadRequired', async () => {
-    const error = await captureSecretError(createSecret({ payload: '', expiresIn: '7d' }));
+    const error = await captureSecretError(createSecret({ authHash: TEST_AUTH_HASH, payload: '', expiresIn: '7d' }));
     expect(error.code).toBe('payloadRequired');
     expect(error.name).toBe('SecretValidationError');
   });
@@ -54,7 +53,7 @@ describe('payload size', () => {
   it('rejects non string payloads, as forwarded by the untyped HTTP body', async () => {
     for (const payload of [undefined, null, 42, {}, ['a']]) {
       const error = await captureSecretError(
-        createSecret({ payload: payload as unknown as string, expiresIn: '7d' }),
+        createSecret({ authHash: TEST_AUTH_HASH, payload: payload as unknown as string, expiresIn: '7d' }),
       );
       expect(error.code).toBe('payloadRequired');
     }
@@ -64,19 +63,19 @@ describe('payload size', () => {
     const { payload } = await sealedSecret('a'.repeat(MAX_SECRET_BYTES));
     expect(Buffer.byteLength(payload, 'utf8')).toBe(MAX_PAYLOAD_BYTES);
 
-    const created = await createSecret({ payload, expiresIn: '7d' });
-    const result = await revealSecret(created.token);
+    const created = await createSecret({ authHash: TEST_AUTH_HASH, payload, expiresIn: '7d' });
+    const result = await revealSecret(created.token, TEST_AUTH_KEY);
     expect(result).toEqual({ ok: true, payload });
   });
 
   it('rejects a string that is not a sealed envelope', async () => {
-    const error = await captureSecretError(createSecret({ payload: 'payload', expiresIn: '7d' }));
+    const error = await captureSecretError(createSecret({ authHash: TEST_AUTH_HASH, payload: 'payload', expiresIn: '7d' }));
     expect(error.code).toBe('invalidPayload');
   });
 
   it('rejects a payload one byte over the limit', async () => {
     const payload = 'a'.repeat(MAX_PAYLOAD_BYTES + 1);
-    const error = await captureSecretError(createSecret({ payload, expiresIn: '7d' }));
+    const error = await captureSecretError(createSecret({ authHash: TEST_AUTH_HASH, payload, expiresIn: '7d' }));
     expect(error.code).toBe('payloadTooLong');
   });
 
@@ -87,7 +86,7 @@ describe('payload size', () => {
     expect(Buffer.byteLength(payload, 'utf8')).toBe(MAX_PAYLOAD_BYTES + 1);
     expect(payload.length).toBeLessThan(MAX_PAYLOAD_BYTES);
 
-    const error = await captureSecretError(createSecret({ payload, expiresIn: '7d' }));
+    const error = await captureSecretError(createSecret({ authHash: TEST_AUTH_HASH, payload, expiresIn: '7d' }));
     expect(error.code).toBe('payloadTooLong');
   });
 
@@ -98,15 +97,15 @@ describe('payload size', () => {
     expect(Buffer.byteLength(payload, 'utf8')).toBeLessThanOrEqual(MAX_PAYLOAD_BYTES);
     expect(payload.length).toBeLessThan(MAX_PAYLOAD_BYTES);
 
-    const created = await createSecret({ payload, expiresIn: '7d' });
-    expect(await revealSecret(created.token)).toEqual({ ok: true, payload });
+    const created = await createSecret({ authHash: TEST_AUTH_HASH, payload, expiresIn: '7d' });
+    expect(await revealSecret(created.token, TEST_AUTH_KEY)).toEqual({ ok: true, payload });
   });
 
   it('rejects a sealed payload that could only come from an oversized secret', async () => {
     // One byte of ciphertext past the ceiling for a maximum size secret.
     const payload = 'a'.repeat(MAX_PAYLOAD_BYTES + 1);
     expect(payload.length).toBeGreaterThan(MAX_PAYLOAD_BYTES);
-    const error = await captureSecretError(createSecret({ payload, expiresIn: '7d' }));
+    const error = await captureSecretError(createSecret({ authHash: TEST_AUTH_HASH, payload, expiresIn: '7d' }));
     expect(error.code).toBe('payloadTooLong');
   });
 
@@ -119,17 +118,16 @@ describe('payload size', () => {
 
 describe('request body size', () => {
   it('accepts a body whose JSON escapes push it past the 64 KiB default', async () => {
-    // base64url never expands, so use maximum envelopes and the proof hash.
+    // base64url and hex never expand, so use a maximum envelope and every field.
     const payload = 'a'.repeat(MAX_PAYLOAD_BYTES);
-    const verifier = 'a'.repeat(MAX_VERIFIER_BYTES);
-    const request = jsonPost({ payload, expiresIn: '7d', verifier, revealProofHash: 'a'.repeat(64) });
+    const request = jsonPost({ payload, expiresIn: '30d', authHash: 'a'.repeat(64), passwordProtected: false });
     expect(Buffer.byteLength(await request.clone().text(), 'utf8')).toBeGreaterThan(64 * 1024);
     expect(Buffer.byteLength(await request.clone().text(), 'utf8')).toBeLessThanOrEqual(MAX_CREATE_BODY_BYTES);
 
     const body = await readJsonBody(request, MAX_CREATE_BODY_BYTES);
     expect(body).not.toBeNull();
     expect(body?.payload).toBe(payload);
-    expect(body?.verifier).toBe(verifier);
+    expect(body?.authHash).toBe('a'.repeat(64));
   });
 
   it('rejects a body one byte over the creation ceiling, before reading it', async () => {
@@ -157,7 +155,7 @@ describe('request body size', () => {
   });
 
   it('keeps a small ceiling on the reveal body', () => {
-    // A reveal carries a token and an authorization proof, never the payload.
+    // A reveal carries a token and an auth key, never the payload.
     expect(MAX_REVEAL_BODY_BYTES).toBeLessThan(MAX_CREATE_BODY_BYTES);
     expect(MAX_REVEAL_BODY_BYTES).toBe(2 * 43 * 6 + 256);
     expect(MAX_REVEAL_BODY_BYTES).toBeLessThan(8 * 1024);
@@ -177,7 +175,7 @@ describe('request body size', () => {
     const body = await readJsonBody(jsonPost({ payload, expiresIn: '7d' }), MAX_CREATE_BODY_BYTES);
     expect(body?.payload).toBe(payload);
     const error = await captureSecretError(
-      createSecret({ payload: body?.payload as string, expiresIn: '7d' }),
+      createSecret({ authHash: TEST_AUTH_HASH, payload: body?.payload as string, expiresIn: '7d' }),
     );
     expect(error.code).toBe('payloadTooLong');
   });
@@ -200,7 +198,7 @@ describe('expiry presets', () => {
   it.each(invalid)('rejects an expiry of %s with invalidExpiry', async (_label, expiresIn) => {
     const { payload } = await sealedSecret('expiry');
     const error = await captureSecretError(
-      createSecret({ payload, expiresIn: expiresIn as ExpiryPreset }),
+      createSecret({ authHash: TEST_AUTH_HASH, payload, expiresIn: expiresIn as ExpiryPreset }),
     );
     expect(error.code).toBe('invalidExpiry');
   });
@@ -209,7 +207,7 @@ describe('expiry presets', () => {
     expect(EXPIRY_PRESETS).toEqual(['1h', '1d', '7d', '30d']);
     for (const preset of EXPIRY_PRESETS) {
       const { payload } = await sealedSecret('preset');
-      const created = await createSecret({ payload, expiresIn: preset });
+      const created = await createSecret({ authHash: TEST_AUTH_HASH, payload, expiresIn: preset });
       const delta = created.expiresAt.getTime() - Date.now();
       expect(delta).toBeGreaterThan(EXPIRY_PRESET_SECONDS[preset] * 1000 - 10_000);
       expect(delta).toBeLessThan(EXPIRY_PRESET_SECONDS[preset] * 1000 + 10_000);
@@ -225,7 +223,7 @@ describe('expiry presets', () => {
     // that, and accepting it would make two spellings of the same request.
     const { payload } = await sealedSecret('coerce');
     const error = await captureSecretError(
-      createSecret({ payload, expiresIn: '7' as unknown as ExpiryPreset }),
+      createSecret({ authHash: TEST_AUTH_HASH, payload, expiresIn: '7' as unknown as ExpiryPreset }),
     );
     expect(error.code).toBe('invalidExpiry');
   });
@@ -235,37 +233,40 @@ describe('expiry presets', () => {
   });
 });
 
-describe('verifier', () => {
-  it('requires a proof hash whenever a verifier is supplied, including internal creation', async () => {
-    const { payload } = await sealedSecret('mandatory authorization');
-    const error = await captureSecretError(createSecret({ payload, expiresIn: '7d', verifier: await dummyVerifier() }));
-    expect(error.code).toBe('invalidVerifier');
+describe('auth hash', () => {
+  it.each([
+    ['missing', undefined],
+    ['null', null],
+    ['a number', 42],
+    ['empty', ''],
+    ['too short', 'a'.repeat(63)],
+    ['too long', 'a'.repeat(65)],
+    ['uppercase hex', 'A'.repeat(64)],
+    ['not hex', 'g'.repeat(64)],
+  ])('rejects an auth hash that is %s with invalidAuth', async (_label, authHash) => {
+    const { payload } = await sealedSecret('auth hash shape');
+    const error = await captureSecretError(createSecret({ payload, expiresIn: '7d', authHash: authHash as string }));
+    expect(error.code).toBe('invalidAuth');
   });
 
-  it('rejects a verifier that is not a sealed envelope', async () => {
-    const { payload } = await sealedSecret('verifier');
+  it.each([
+    ['a string', 'true'],
+    ['a number', 1],
+    ['null', null],
+  ])('rejects a password flag that is %s', async (_label, flag) => {
+    const { payload } = await sealedSecret('password flag');
     const error = await captureSecretError(
-      createSecret({ payload, expiresIn: '7d', verifier: 'not-an-envelope' }),
+      createSecret({ payload, expiresIn: '7d', authHash: TEST_AUTH_HASH, passwordProtected: flag as unknown as boolean }),
     );
-    expect(error.code).toBe('invalidVerifier');
+    expect(error.code).toBe('invalidAuth');
   });
 
-  it('treats an empty verifier as no password at all', async () => {
-    const { payload } = await sealedSecret('empty verifier');
-    const created = await createSecret({ payload, expiresIn: '7d', verifier: '' });
+  it('stores the hash and the flag, and reveals only with the matching key', async () => {
+    const { payload } = await sealedSecret('with auth');
+    const created = await createSecret({ payload, expiresIn: '7d', authHash: TEST_AUTH_HASH, passwordProtected: true });
     const row = await fetchSecretRow(created.token);
-    expect(row?.password_hash).toBeNull();
-    expect(row?.password_verifier).toBeNull();
-    expect(await revealSecret(created.token)).toEqual({ ok: true, payload });
-  });
-
-  it('stores a verifier and still reveals the original payload', async () => {
-    const { payload } = await sealedSecret('with verifier');
-    const verifier = await dummyVerifier();
-    const created = await createSecret({ payload, expiresIn: '7d', verifier, revealProofHash: DUMMY_REVEAL_PROOF_HASH });
-    const row = await fetchSecretRow(created.token);
-    expect(row?.password_hash).toBeNull();
-    expect(row?.password_verifier).toBeTruthy();
-    expect(await revealSecret(created.token, DUMMY_REVEAL_PROOF)).toEqual({ ok: true, payload });
+    expect(row?.auth_hash).toBe(expectedStoredAuthHash(TEST_AUTH_HASH));
+    expect(row?.has_password).toBe(true);
+    expect(await revealSecret(created.token, TEST_AUTH_KEY)).toEqual({ ok: true, payload });
   });
 });

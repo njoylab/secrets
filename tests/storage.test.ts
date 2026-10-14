@@ -7,7 +7,7 @@
  * readable secret. No assertion message contains secret content.
  */
 import { Buffer } from 'node:buffer';
-import { createHash } from 'node:crypto';
+import { createHash, createHmac, hkdfSync } from 'node:crypto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   decryptSecret,
@@ -15,18 +15,19 @@ import {
   isValidTokenShape,
 } from '../src/lib/crypto.ts';
 import { query } from '../src/lib/db.ts';
-import { getConfig } from '../src/lib/env.ts';
-import { createSecret, purgeExpired, readControlStatus, revealSecret } from '../src/lib/secrets.ts';
+import { getConfig, resetConfigCache } from '../src/lib/env.ts';
+import { createSecret, readControlStatus, revealSecret } from '../src/lib/secrets.ts';
 import {
   countReceipts,
   countSecrets,
   fetchReceipt,
   fetchReceiptJson,
-  dummyVerifier,
-  DUMMY_REVEAL_PROOF,
-  DUMMY_REVEAL_PROOF_HASH,
+  expectedStoredAuthHash,
+  TEST_AUTH_HASH,
+  TEST_AUTH_KEY,
   fetchSecretRow,
   forceExpire,
+  purgeExpired,
   resetEnv,
   secretRowJson,
   sealedSecret,
@@ -83,7 +84,7 @@ function encodings(value: string): string[] {
 
 describe('ciphertext', () => {
   it('stores no plaintext and no recognisable encoding of it', async () => {
-    const created = await createSecret({ payload: await probe(), expiresIn: '7d' });
+    const created = await createSecret({ authHash: TEST_AUTH_HASH, payload: await probe(), expiresIn: '7d' });
     const row = await fetchSecretRow(created.token);
 
     expect(row).toBeDefined();
@@ -96,7 +97,7 @@ describe('ciphertext', () => {
 
   it('is a base64url sealed payload of nonce + ciphertext + tag', async () => {
     const payload = await probe();
-    const created = await createSecret({ payload, expiresIn: '7d' });
+    const created = await createSecret({ authHash: TEST_AUTH_HASH, payload, expiresIn: '7d' });
     const row = await fetchSecretRow(created.token);
     if (!row) throw new Error('secret row missing');
 
@@ -118,8 +119,8 @@ describe('ciphertext', () => {
   });
 
   it('uses a fresh nonce, so the same plaintext never produces the same row twice', async () => {
-    const first = await createSecret({ payload: await probe(), expiresIn: '7d' });
-    const second = await createSecret({ payload: await probe(), expiresIn: '7d' });
+    const first = await createSecret({ authHash: TEST_AUTH_HASH, payload: await probe(), expiresIn: '7d' });
+    const second = await createSecret({ authHash: TEST_AUTH_HASH, payload: await probe(), expiresIn: '7d' });
 
     const firstRow = await fetchSecretRow(first.token);
     const secondRow = await fetchSecretRow(second.token);
@@ -134,7 +135,7 @@ describe('ciphertext', () => {
 
 describe('control token persistence', () => {
   it('stores the same sha256 hex for the control token, and never the token', async () => {
-    const created = await createSecret({ payload: await probe(), expiresIn: '7d' });
+    const created = await createSecret({ authHash: TEST_AUTH_HASH, payload: await probe(), expiresIn: '7d' });
     const row = await fetchSecretRow(created.token);
     if (!row) throw new Error('secret row missing');
 
@@ -147,10 +148,10 @@ describe('control token persistence', () => {
 
   it('never stores the control token itself, anywhere in the row', async () => {
     const created = await createSecret({
+      authHash: TEST_AUTH_HASH,
       payload: await probe(),
       expiresIn: '7d',
-      verifier: await dummyVerifier(),
-      revealProofHash: DUMMY_REVEAL_PROOF_HASH,
+      passwordProtected: true,
     });
     const json = await secretRowJson(created.token);
     const row = await fetchSecretRow(created.token);
@@ -158,12 +159,12 @@ describe('control token persistence', () => {
 
     expect(contains(json, created.controlToken)).toBe(false);
     expect(contains(row.ciphertext, created.controlToken)).toBe(false);
-    expect(contains(row.password_hash ?? '', created.controlToken)).toBe(false);
+    expect(contains(row.auth_hash, created.controlToken)).toBe(false);
     expect(json).toContain(row.control_hash);
   });
 
   it('resolves a control link through the hash, never through the secret token', async () => {
-    const created = await createSecret({ payload: await probe(), expiresIn: '7d' });
+    const created = await createSecret({ authHash: TEST_AUTH_HASH, payload: await probe(), expiresIn: '7d' });
     // A share token must not open a control link, even a well formed one.
     expect(await readControlStatus(created.token)).toBeNull();
     expect((await readControlStatus(created.controlToken))?.state).toBe('pending');
@@ -173,7 +174,7 @@ describe('control token persistence', () => {
 describe('receipt persistence', () => {
   it('stores only a state, a hash and two timestamps, never content', async () => {
     const payload = await probe();
-    const created = await createSecret({ payload, expiresIn: '1d', verifier: await dummyVerifier(), revealProofHash: DUMMY_REVEAL_PROOF_HASH });
+    const created = await createSecret({ authHash: TEST_AUTH_HASH, payload, expiresIn: '1d', passwordProtected: true });
     await forceExpire(created.token);
     await purgeExpired(HOUR_SECONDS);
 
@@ -191,8 +192,8 @@ describe('receipt persistence', () => {
   });
 
   it('keys the receipt on the control hash, not on the secret token hash', async () => {
-    const created = await createSecret({ payload: await probe(), expiresIn: '1d' });
-    await revealSecret(created.token);
+    const created = await createSecret({ authHash: TEST_AUTH_HASH, payload: await probe(), expiresIn: '1d' });
+    await revealSecret(created.token, TEST_AUTH_KEY);
 
     const receipt = await fetchReceipt(created.controlToken);
     if (!receipt) throw new Error('receipt missing');
@@ -203,7 +204,7 @@ describe('receipt persistence', () => {
 
 describe('token persistence', () => {
   it('stores the lowercase 64 character sha256 hex of the token', async () => {
-    const created = await createSecret({ payload: await probe(), expiresIn: '7d' });
+    const created = await createSecret({ authHash: TEST_AUTH_HASH, payload: await probe(), expiresIn: '7d' });
     const row = await fetchSecretRow(created.token);
     if (!row) throw new Error('secret row missing');
 
@@ -216,57 +217,91 @@ describe('token persistence', () => {
   });
 
   it('never stores the token itself, anywhere in the row', async () => {
-    const created = await createSecret({ payload: await probe(), expiresIn: '7d', verifier: await dummyVerifier(), revealProofHash: DUMMY_REVEAL_PROOF_HASH });
+    const created = await createSecret({ authHash: TEST_AUTH_HASH, payload: await probe(), expiresIn: '7d', passwordProtected: true });
     const row = await fetchSecretRow(created.token);
     if (!row) throw new Error('secret row missing');
     const json = await secretRowJson(created.token);
 
     expect(contains(json, created.token)).toBe(false);
     expect(contains(row.ciphertext, created.token)).toBe(false);
-    expect(contains(row.password_hash ?? '', created.token)).toBe(false);
+    expect(contains(row.auth_hash, created.token)).toBe(false);
     expect(contains(row.created_at.toISOString(), created.token)).toBe(false);
     expect(json).toContain(row.token_hash);
   });
 });
 
-describe('password persistence', () => {
-  it('stores an opaque verifier and never the password', async () => {
-    const verifier = await dummyVerifier();
-    const created = await createSecret({ payload: await probe(), expiresIn: '7d', verifier, revealProofHash: DUMMY_REVEAL_PROOF_HASH });
+describe('auth persistence', () => {
+  it('stores the keyed auth hash and a password flag, never the password', async () => {
+    const created = await createSecret({ authHash: TEST_AUTH_HASH, payload: await probe(), expiresIn: '7d', passwordProtected: true });
     const row = await fetchSecretRow(created.token);
-    if (!row?.password_verifier) throw new Error('password_verifier is null');
+    if (!row) throw new Error('secret row missing');
 
-    expect(row.password_hash).toBeNull();
-    expect(row.password_verifier).not.toBe(verifier);
-    expect(contains(row.password_verifier, PROBE_PASSWORD)).toBe(false);
-    expect(contains(await secretRowJson(created.token), PROBE_PASSWORD)).toBe(false);
+    expect(row.auth_hash).toBe(expectedStoredAuthHash(TEST_AUTH_HASH));
+    expect(row.has_password).toBe(true);
+    const json = await secretRowJson(created.token);
+    expect(contains(json, PROBE_PASSWORD)).toBe(false);
+    // The auth key itself is presented only on reveal and never persisted.
+    expect(contains(json, TEST_AUTH_KEY)).toBe(false);
   });
 
-  it('seals every verifier, so two secrets store different values', async () => {
-    const first = await createSecret({
-      payload: await probe(),
-      expiresIn: '7d',
-      verifier: await dummyVerifier(),
-      revealProofHash: DUMMY_REVEAL_PROOF_HASH,
-    });
-    const second = await createSecret({
-      payload: await probe(),
-      expiresIn: '7d',
-      verifier: await dummyVerifier(),
-      revealProofHash: DUMMY_REVEAL_PROOF_HASH,
-    });
+  it('stores an HMAC of the auth hash under a deployment subkey, not the hash itself', async () => {
+    const created = await createSecret({ authHash: TEST_AUTH_HASH, payload: await probe(), expiresIn: '7d', passwordProtected: true });
+    const row = await fetchSecretRow(created.token);
+    if (!row) throw new Error('secret row missing');
 
+    const clientHash = Buffer.from(TEST_AUTH_HASH, 'hex');
+    expect(row.auth_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(row.auth_hash).not.toBe(TEST_AUTH_HASH);
+    expect(row.auth_hash).not.toBe(createHash('sha256').update(clientHash).digest('hex'));
+    // Keyed with the HKDF subkey, never with the AES key bytes directly.
+    const deploymentKey = getConfig().encryptionKey;
+    expect(row.auth_hash).not.toBe(createHmac('sha256', deploymentKey).update(clientHash).digest('hex'));
+    const subkey = Buffer.from(hkdfSync('sha256', deploymentKey, Buffer.alloc(0), 'echovalue-secrets-v3:auth-hmac', 32));
+    expect(row.auth_hash).toBe(createHmac('sha256', subkey).update(clientHash).digest('hex'));
+    expect(await revealSecret(created.token, TEST_AUTH_KEY)).toMatchObject({ ok: true });
+  });
+
+  it('stores a different auth hash under a different deployment key', async () => {
+    const first = await createSecret({ authHash: TEST_AUTH_HASH, payload: await probe(), expiresIn: '7d' });
+    const original = process.env.SECRET_ENCRYPTION_KEY;
+    process.env.SECRET_ENCRYPTION_KEY = Buffer.alloc(32, 3).toString('base64url');
+    resetConfigCache();
+    let second: Awaited<ReturnType<typeof createSecret>>;
+    try {
+      second = await createSecret({ authHash: TEST_AUTH_HASH, payload: await probe(), expiresIn: '7d' });
+    } finally {
+      process.env.SECRET_ENCRYPTION_KEY = original;
+      resetConfigCache();
+    }
     const firstRow = await fetchSecretRow(first.token);
     const secondRow = await fetchSecretRow(second.token);
-    expect(firstRow?.password_verifier).toBeTruthy();
-    expect(firstRow?.password_verifier).not.toBe(secondRow?.password_verifier);
+    expect(firstRow?.auth_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(secondRow?.auth_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(firstRow?.auth_hash).not.toBe(secondRow?.auth_hash);
   });
 
-  it('stores NULL, not an empty string, when no password is set', async () => {
-    const created = await createSecret({ payload: await probe(), expiresIn: '7d' });
+  it('stores false, not NULL, when no password is set', async () => {
+    const created = await createSecret({ authHash: TEST_AUTH_HASH, payload: await probe(), expiresIn: '7d' });
     const row = await fetchSecretRow(created.token);
-    expect(row?.password_hash).toBeNull();
-    expect(row?.password_verifier).toBeNull();
+    expect(row?.has_password).toBe(false);
+    expect(row?.auth_hash).toBe(expectedStoredAuthHash(TEST_AUTH_HASH));
+  });
+
+  it('keeps no column from the retired verifier format', async () => {
+    const { rows } = await query<{ column_name: string }>(
+      `SELECT column_name FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'secrets'
+        ORDER BY column_name`,
+    );
+    expect(rows.map((row) => row.column_name)).toEqual([
+      'auth_hash',
+      'ciphertext',
+      'control_hash',
+      'created_at',
+      'expires_at',
+      'has_password',
+      'token_hash',
+    ]);
   });
 });
 
@@ -289,7 +324,7 @@ describe('expiry storage', () => {
   }
 
   it.each([1, 7, 30])('derives expires_at from the database clock for %i days', async (days) => {
-    const created = await createSecret({ payload: await probe(), expiresIn: days === 1 ? '1d' : days === 7 ? '7d' : '30d' });
+    const created = await createSecret({ authHash: TEST_AUTH_HASH, payload: await probe(), expiresIn: days === 1 ? '1d' : days === 7 ? '7d' : '30d' });
     const drift = await expiryDrift(created.token, days);
 
     // created_at is written by the database default, so an expiry that sits
@@ -300,7 +335,7 @@ describe('expiry storage', () => {
   });
 
   it('returns to the caller the very timestamp the database stored', async () => {
-    const created = await createSecret({ payload: await probe(), expiresIn: '7d' });
+    const created = await createSecret({ authHash: TEST_AUTH_HASH, payload: await probe(), expiresIn: '7d' });
     const row = await fetchSecretRow(created.token);
     if (!row) throw new Error('secret row missing');
 
@@ -309,7 +344,7 @@ describe('expiry storage', () => {
   });
 
   it('keeps the row unreadable once the stored expiry is in the past', async () => {
-    const created = await createSecret({ payload: await probe(), expiresIn: '1d', verifier: await dummyVerifier(), revealProofHash: DUMMY_REVEAL_PROOF_HASH });
+    const created = await createSecret({ authHash: TEST_AUTH_HASH, payload: await probe(), expiresIn: '1d', passwordProtected: true });
     await query(`UPDATE secrets SET expires_at = now() - interval '1 second' WHERE token_hash = $1`, [
       hashToken(created.token),
     ]);
@@ -320,14 +355,14 @@ describe('expiry storage', () => {
 
 describe('token shape', () => {
   it('accepts a generated token', async () => {
-    const created = await createSecret({ payload: await probe(), expiresIn: '7d' });
+    const created = await createSecret({ authHash: TEST_AUTH_HASH, payload: await probe(), expiresIn: '7d' });
     expect(isValidTokenShape(created.token)).toBe(true);
   });
 
   it('accepts any 43 character base64url string, existing secret or not', async () => {
     // The check is about the encoding of 32 random bytes, not about existence:
     // a well formed token with no row is rejected by the lookup, not here.
-    const created = await createSecret({ payload: await probe(), expiresIn: '7d' });
+    const created = await createSecret({ authHash: TEST_AUTH_HASH, payload: await probe(), expiresIn: '7d' });
     expect(isValidTokenShape(created.token)).toBe(true);
     expect(isValidTokenShape('x'.repeat(43))).toBe(true);
     expect(isValidTokenShape('-_-'.repeat(14) + '-')).toBe(true);
@@ -369,19 +404,19 @@ describe('revealSecret with a malformed token', () => {
   ];
 
   it.each(malformed)('returns unavailable for a %s token and changes nothing', async (_label, token) => {
-    const live = await createSecret({ payload: await probe(), expiresIn: '7d', verifier: await dummyVerifier(), revealProofHash: DUMMY_REVEAL_PROOF_HASH });
+    const live = await createSecret({ authHash: TEST_AUTH_HASH, payload: await probe(), expiresIn: '7d', passwordProtected: true });
     const before = await secretRowJson(live.token);
 
-    expect(await revealSecret(token)).toEqual({ ok: false, reason: 'unavailable' });
+    expect(await revealSecret(token, TEST_AUTH_KEY)).toEqual({ ok: false, reason: 'unavailable' });
     expect(await revealSecret(token, PROBE_PASSWORD)).toEqual({ ok: false, reason: 'unavailable' });
     // The malformed attempt must not consume, delete or alter anything.
     expect(await countSecrets()).toBe(1);
     expect(await secretRowJson(live.token)).toBe(before);
-    expect(await revealSecret(live.token, DUMMY_REVEAL_PROOF)).toEqual({ ok: true, payload: await probe() });
+    expect(await revealSecret(live.token, TEST_AUTH_KEY)).toEqual({ ok: true, payload: await probe() });
   });
 
   it('treats a protected secret as unavailable, not as bad_password, for a malformed token', async () => {
-    const live = await createSecret({ payload: await probe(), expiresIn: '7d', verifier: await dummyVerifier(), revealProofHash: DUMMY_REVEAL_PROOF_HASH });
+    const live = await createSecret({ authHash: TEST_AUTH_HASH, payload: await probe(), expiresIn: '7d', passwordProtected: true });
     // An unknown token must not be distinguishable from a wrong password: the
     // answer reveals nothing about whether a protected secret exists.
     expect(await revealSecret('x'.repeat(43), 'wrong-password')).toEqual({
@@ -393,6 +428,6 @@ describe('revealSecret with a malformed token', () => {
       reason: 'unavailable',
     });
     expect(await countSecrets()).toBe(1);
-    expect(await revealSecret(live.token, DUMMY_REVEAL_PROOF)).toEqual({ ok: true, payload: await probe() });
+    expect(await revealSecret(live.token, TEST_AUTH_KEY)).toEqual({ ok: true, payload: await probe() });
   });
 });

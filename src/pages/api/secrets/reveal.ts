@@ -5,6 +5,10 @@
  * rendering, prefetching and crawlers cannot trigger a read. The response carries
  * the sealed payload, not the text: the browser opens it with the key from the
  * share link fragment, which never reached this process.
+ *
+ * The body carries the auth key derived from that fragment key and the optional
+ * password. A wrong one is refused before the delete, so password guessing only
+ * happens here, one request per guess, under the reveal rate limit.
  */
 import type { APIRoute } from 'astro';
 import { errorResponse, jsonResponse } from '../../../lib/http.ts';
@@ -25,13 +29,16 @@ export const POST: APIRoute = async (context) => {
   const token = typeof body.token === 'string' ? body.token : '';
   if (!isValidTokenShape(token)) return errorResponse(locale, 'unavailable', 404);
 
-  const revealProof = typeof body.revealProof === 'string' ? body.revealProof : undefined;
-  const result = await revealSecret(token, revealProof);
+  const result = await revealSecret(token, body.authKey);
 
   if (!result.ok) {
     if (result.reason === 'bad_password') {
       // 403 rather than 404: the secret exists, the credential does not match.
       return errorResponse(locale, 'badPassword', 403);
+    }
+    if (result.reason === 'bad_key') {
+      // No password on this secret, so the fragment key itself does not match.
+      return errorResponse(locale, 'badKey', 403);
     }
     if (result.reason === 'undecryptable') {
       // The link is still there and the row was not consumed, so 404 would be a

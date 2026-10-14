@@ -5,12 +5,12 @@ import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
 import { expect, it } from 'vitest';
 import { createSecret } from '../src/lib/secrets.ts';
-import { fetchSecretRow, sealedSecret } from './helpers.ts';
+import { fetchSecretRow, sealedSecret, TEST_AUTH_HASH } from './helpers.ts';
 
 const run = promisify(execFile);
 
 it('never deletes existing rows during teardown after rejecting the database', async () => {
-  const created = await createSecret({ payload: (await sealedSecret('synthetic guard fixture')).payload, expiresIn: '1h' });
+  const created = await createSecret({ payload: (await sealedSecret('synthetic guard fixture')).payload, expiresIn: '1h', authHash: TEST_AUTH_HASH });
   const directory = await mkdtemp(join(tmpdir(), 'secrets-test-guard-'));
   try {
     const config = join(directory, 'vitest.config.mjs');

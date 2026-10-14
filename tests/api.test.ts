@@ -12,10 +12,8 @@ import type { APIContext, APIRoute } from 'astro';
 import { POST as createEndpoint, ALL as createAll } from '../src/pages/api/secrets/index.ts';
 import { POST as revealEndpoint } from '../src/pages/api/secrets/reveal.ts';
 import { POST as cancelEndpoint } from '../src/pages/api/secrets/cancel.ts';
-import { POST as verifierEndpoint } from '../src/pages/api/secrets/verifier.ts';
 import { CANCEL_BUCKET, REVEAL_BUCKET } from '../src/lib/rate-limit.ts';
 import { MAX_PAYLOAD_BYTES } from '../src/lib/secrets.ts';
-import { generateToken, hashToken } from '../src/lib/crypto.ts';
 import {
   countRateLimits,
   countReceipts,
@@ -23,8 +21,10 @@ import {
   controlLink,
   fetchRateLimitRows,
   resetEnv,
-  dummyVerifier,
+  sealedPasswordSecret,
   sealedSecret,
+  TEST_AUTH_HASH,
+  TEST_AUTH_KEY,
   shareLink,
 } from './helpers.ts';
 
@@ -67,61 +67,90 @@ async function call(handler: APIRoute, path: string, body: unknown, ip = CLIENT_
 const create = (body: unknown, ip?: string) => call(createEndpoint, '/api/secrets', body, ip);
 const reveal = (body: unknown, ip?: string) => call(revealEndpoint, '/api/secrets/reveal', body, ip);
 const cancel = (body: unknown, ip?: string) => call(cancelEndpoint, '/api/secrets/cancel', body, ip);
-const verifier = (body: unknown, ip?: string) => call(verifierEndpoint, '/api/secrets/verifier', body, ip);
 
 beforeEach(async () => {
   await resetEnv();
 });
 
 describe('POST /api/secrets', () => {
-  it('refuses token-only consumption of a proof-protected secret without deleting it', async () => {
+  it('refuses token-only or wrong-password consumption without deleting the secret', async () => {
     await resetEnv({ RATE_LIMIT_REVEAL_MAX: '30' });
-    const { payload } = await sealedSecret('authorization regression');
-    const proof = generateToken();
-    const created = await create({ payload, expiresIn: '7d', verifier: await dummyVerifier(), revealProofHash: hashToken(proof) });
+    const sealed = await sealedPasswordSecret('authorization regression', 'synthetic password');
+    const created = await create({ payload: sealed.payload, expiresIn: '7d', authHash: sealed.authHash, passwordProtected: true });
     expect(created.status).toBe(201);
     const token = String(created.body.token);
-    for (const revealProof of [undefined, null, 42, generateToken(), hashToken(proof)]) {
-      expect((await reveal({ token, revealProof })).status).toBe(403);
+    for (const authKey of [undefined, null, 42, TEST_AUTH_KEY, sealed.authHash, `${sealed.authKey}=`]) {
+      const reply = await reveal({ token, authKey });
+      expect(reply.status).toBe(403);
+      expect(reply.body.error).toBe('badPassword');
       expect(await countSecrets()).toBe(1);
       expect(await countReceipts()).toBe(0);
     }
-    expect((await reveal({ token, revealProof: proof })).body.payload).toBe(payload);
-    expect((await reveal({ token, revealProof: proof })).status).toBe(404);
+    expect((await reveal({ token, authKey: sealed.authKey })).body.payload).toBe(sealed.payload);
+    expect((await reveal({ token, authKey: sealed.authKey })).status).toBe(404);
     expect(await countReceipts()).toBe(1);
     await resetEnv({ RATE_LIMIT_REVEAL_MAX: '5' });
   });
 
-  it('rejects missing or malformed proof hashes on new password links', async () => {
+  it('answers a wrong key on a secret without a password with badKey, without consuming', async () => {
+    const sealed = await sealedSecret('key check');
+    const created = await create({ payload: sealed.payload, expiresIn: '7d', authHash: sealed.authHash });
+    const token = String(created.body.token);
+    const reply = await reveal({ token, authKey: TEST_AUTH_KEY });
+    expect(reply.status).toBe(403);
+    expect(reply.body.error).toBe('badKey');
+    expect(reply.body.message).toBe('Key does not match. The secret was not consumed.');
+    expect(await countSecrets()).toBe(1);
+    expect((await reveal({ token, authKey: sealed.authKey })).body.payload).toBe(sealed.payload);
+  });
+
+  it('rejects missing or malformed auth hashes', async () => {
     await resetEnv({ RATE_LIMIT_CREATE_MAX: '30' });
-    const { payload } = await sealedSecret('proof validation');
-    const check = await dummyVerifier();
-    for (const revealProofHash of [undefined, null, 42, '', 'a'.repeat(63), 'G'.repeat(64)]) {
-      expect((await create({ payload, expiresIn: '7d', verifier: check, revealProofHash })).status).toBe(422);
+    const { payload } = await sealedSecret('auth validation');
+    for (const authHash of [undefined, null, 42, '', 'a'.repeat(63), 'G'.repeat(64)]) {
+      const reply = await create({ payload, expiresIn: '7d', authHash });
+      expect(reply.status).toBe(422);
+      expect(reply.body.error).toBe('invalidAuth');
     }
-    expect((await create({ payload, expiresIn: '7d', revealProofHash: hashToken(generateToken()) })).status).toBe(422);
+    expect((await create({ payload, expiresIn: '7d', authHash: TEST_AUTH_HASH, passwordProtected: 'yes' })).status).toBe(422);
+    // The retired verifier fields are not a way around the auth hash.
+    expect((await create({ payload, expiresIn: '7d', verifier: payload, revealProofHash: TEST_AUTH_HASH })).status).toBe(422);
     expect(await countSecrets()).toBe(0);
     await resetEnv({ RATE_LIMIT_CREATE_MAX: '5' });
   });
 
-  it('allows only one concurrent reveal with the correct proof', async () => {
+  it('charges every password guess to the reveal rate limit', async () => {
+    const sealed = await sealedPasswordSecret('online guessing', 'synthetic password');
+    const created = await create({ payload: sealed.payload, expiresIn: '7d', authHash: sealed.authHash, passwordProtected: true });
+    const token = String(created.body.token);
+    const statuses: number[] = [];
+    for (let attempt = 0; attempt < 7; attempt += 1) {
+      statuses.push((await reveal({ token, authKey: TEST_AUTH_KEY })).status);
+    }
+    // The suite allows five reveals per window; guesses beyond that are refused
+    // before the database is even asked, and the right key waits too.
+    expect(statuses).toEqual([403, 403, 403, 403, 403, 429, 429]);
+    expect((await reveal({ token, authKey: sealed.authKey })).status).toBe(429);
+    expect(await countSecrets()).toBe(1);
+  });
+
+  it('allows only one concurrent reveal with the correct key', async () => {
     await resetEnv({ RATE_LIMIT_REVEAL_MAX: '30' });
-    const { payload } = await sealedSecret('proof race');
-    const proof = generateToken();
-    const created = await create({ payload, expiresIn: '7d', verifier: await dummyVerifier(), revealProofHash: hashToken(proof) });
+    const sealed = await sealedSecret('auth race');
+    const created = await create({ payload: sealed.payload, expiresIn: '7d', authHash: sealed.authHash });
     const token = String(created.body.token);
     const replies = await Promise.all(Array.from({ length: 8 }, (_, i) =>
-      reveal({ token, revealProof: i % 2 === 0 ? proof : generateToken() })));
+      reveal({ token, authKey: i % 2 === 0 ? sealed.authKey : TEST_AUTH_KEY })));
     expect(replies.filter((reply) => reply.status === 200)).toHaveLength(1);
-    expect(replies.find((reply) => reply.status === 200)?.body.payload).toBe(payload);
+    expect(replies.find((reply) => reply.status === 200)?.body.payload).toBe(sealed.payload);
     expect(await countSecrets()).toBe(0);
     expect(await countReceipts()).toBe(1);
     await resetEnv({ RATE_LIMIT_REVEAL_MAX: '5' });
   });
 
-  it('accepts a payload, an expiry preset and a verifier, and returns two links', async () => {
+  it('accepts a payload, an expiry preset and an auth hash, and returns two links', async () => {
     const { payload } = await sealedSecret('wire contract');
-    const reply = await create({ payload, expiresIn: '1h', verifier: await dummyVerifier(), revealProofHash: hashToken(generateToken()) });
+    const reply = await create({ payload, expiresIn: '1h', authHash: TEST_AUTH_HASH, passwordProtected: true });
 
     expect(reply.status).toBe(201);
     expect(reply.body.ok).toBe(true);
@@ -137,7 +166,7 @@ describe('POST /api/secrets', () => {
 
   it('never returns the content key, and never puts a fragment in the share url', async () => {
     const { payload, keyText } = await sealedSecret('fragment hygiene');
-    const reply = await create({ payload, expiresIn: '7d' });
+    const reply = await create({ authHash: TEST_AUTH_HASH, payload, expiresIn: '7d' });
 
     // The key lives in the page, not in a response body: an observer of the JSON
     // alone cannot reconstruct the link.
@@ -155,7 +184,7 @@ describe('POST /api/secrets', () => {
       request: new Request('http://localhost/api/secrets', {
         method: 'POST',
         headers: { 'content-type': 'application/json', host: 'secrets.example.com' },
-        body: JSON.stringify({ payload, expiresIn: '7d' }),
+        body: JSON.stringify({ payload, expiresIn: '7d', authHash: TEST_AUTH_HASH }),
       }),
       locals: { locale: 'en', peerAddress: CLIENT_IP },
     } as unknown as APIContext);
@@ -169,7 +198,7 @@ describe('POST /api/secrets', () => {
 
   it('returns a 422 with a typed error for an unknown expiry preset', async () => {
     const { payload } = await sealedSecret('bad preset');
-    const reply = await create({ payload, expiresIn: '7' });
+    const reply = await create({ authHash: TEST_AUTH_HASH, payload, expiresIn: '7' });
 
     expect(reply.status).toBe(422);
     expect(reply.body.error).toBe('invalidExpiry');
@@ -177,11 +206,11 @@ describe('POST /api/secrets', () => {
   });
 
   it('returns a 422 for a missing payload, and for one over the ceiling', async () => {
-    const missing = await create({ expiresIn: '7d' });
+    const missing = await create({ authHash: TEST_AUTH_HASH, expiresIn: '7d' });
     expect(missing.status).toBe(422);
     expect(missing.body.error).toBe('payloadRequired');
 
-    const oversized = await create({ payload: 'a'.repeat(MAX_PAYLOAD_BYTES + 1), expiresIn: '7d' });
+    const oversized = await create({ authHash: TEST_AUTH_HASH, payload: 'a'.repeat(MAX_PAYLOAD_BYTES + 1), expiresIn: '7d' });
     expect(oversized.status).toBe(422);
     expect(oversized.body.error).toBe('payloadTooLong');
     expect(await countSecrets()).toBe(0);
@@ -226,22 +255,22 @@ describe('POST /api/secrets', () => {
 describe('POST /api/secrets/reveal', () => {
   it('returns the sealed payload once, and 404 for every later attempt', async () => {
     const { payload } = await sealedSecret('once');
-    const created = await create({ payload, expiresIn: '7d' });
+    const created = await create({ authHash: TEST_AUTH_HASH, payload, expiresIn: '7d' });
     const token = String(created.body.token);
 
-    const first = await reveal({ token });
+    const first = await reveal({ token, authKey: TEST_AUTH_KEY });
     expect(first.status).toBe(200);
     expect(first.body.ok).toBe(true);
     expect(first.body.payload).toBe(payload);
 
-    const second = await reveal({ token });
+    const second = await reveal({ token, authKey: TEST_AUTH_KEY });
     expect(second.status).toBe(404);
     expect(second.body.error).toBe('unavailable');
   });
 
   it('refuses a password field and stores nothing', async () => {
     const { payload } = await sealedSecret('no server password');
-    const reply = await create({ payload, expiresIn: '7d', password: 'pw-probe' });
+    const reply = await create({ authHash: TEST_AUTH_HASH, payload, expiresIn: '7d', password: 'pw-probe' });
 
     expect(reply.status).toBe(422);
     expect(reply.body.error).toBe('passwordRejected');
@@ -249,37 +278,21 @@ describe('POST /api/secrets/reveal', () => {
     expect(await countSecrets()).toBe(0);
   });
 
-  it('returns the verifier without consuming, then reveal still returns the payload once', async () => {
-    const { payload } = await sealedSecret('locked');
-    const check = await dummyVerifier();
-    const proof = generateToken();
-    const created = await create({ payload, expiresIn: '7d', verifier: check, revealProofHash: hashToken(proof) });
-    const token = String(created.body.token);
-
-    const first = await verifier({ token });
-    expect(first.status).toBe(200);
-    expect(first.body.verifier).toBe(check);
-    expect(await countSecrets()).toBe(1);
-
-    expect((await reveal({ token, revealProof: proof })).body.payload).toBe(payload);
-    expect((await verifier({ token })).status).toBe(404);
-  });
-
   it('answers 404, not 403, for a token that does not exist', async () => {
-    const reply = await reveal({ token: 'x'.repeat(43), password: 'anything' });
+    const reply = await reveal({ token: 'x'.repeat(43), password: 'anything', authKey: TEST_AUTH_KEY });
     expect(reply.status).toBe(404);
   });
 
   it('answers 404 for a malformed token, without touching the database', async () => {
     for (const token of ['', 'not-a-token', 'x'.repeat(42), `${'x'.repeat(42)}+`]) {
-      expect((await reveal({ token })).status).toBe(404);
+      expect((await reveal({ token, authKey: TEST_AUTH_KEY })).status).toBe(404);
     }
     expect(await countSecrets()).toBe(0);
   });
 
   it('rejects an oversized body without consuming anything', async () => {
     const { payload } = await sealedSecret('big body');
-    const created = await create({ payload, expiresIn: '7d' });
+    const created = await create({ authHash: TEST_AUTH_HASH, payload, expiresIn: '7d' });
     const response = await revealEndpoint({
       request: new Request(`${ORIGIN}/api/secrets/reveal`, {
         method: 'POST',
@@ -298,7 +311,7 @@ describe('POST /api/secrets/reveal', () => {
 describe('POST /api/secrets/cancel', () => {
   it('cancels a pending secret and reports the state', async () => {
     const { payload } = await sealedSecret('cancel me');
-    const created = await create({ payload, expiresIn: '7d' });
+    const created = await create({ authHash: TEST_AUTH_HASH, payload, expiresIn: '7d' });
     const controlToken = String(created.body.controlToken);
 
     const reply = await cancel({ token: controlToken });
@@ -309,14 +322,14 @@ describe('POST /api/secrets/cancel', () => {
     expect(await countReceipts()).toBe(1);
 
     // The share link is dead, and the endpoint says nothing about the content.
-    expect((await reveal({ token: String(created.body.token) })).status).toBe(404);
+    expect((await reveal({ token: String(created.body.token), authKey: TEST_AUTH_KEY })).status).toBe(404);
   });
 
   it('reports read after the secret was read, without changing it', async () => {
     const { payload } = await sealedSecret('already read');
-    const created = await create({ payload, expiresIn: '7d' });
+    const created = await create({ authHash: TEST_AUTH_HASH, payload, expiresIn: '7d' });
     const controlToken = String(created.body.controlToken);
-    await reveal({ token: String(created.body.token) });
+    await reveal({ token: String(created.body.token), authKey: TEST_AUTH_KEY });
 
     const reply = await cancel({ token: controlToken });
     expect(reply.status).toBe(200);
@@ -336,7 +349,7 @@ describe('POST /api/secrets/cancel', () => {
     // The suite allows five reveals per window. Cancel gets the same five in a
     // separate counter, so these attempts do not touch the reveal bucket.
     const { payload } = await sealedSecret('budget');
-    const created = await create({ payload, expiresIn: '7d' });
+    const created = await create({ authHash: TEST_AUTH_HASH, payload, expiresIn: '7d' });
     const controlToken = String(created.body.controlToken);
 
     const statuses: number[] = [];
@@ -354,7 +367,7 @@ describe('POST /api/secrets/cancel', () => {
 
   it('refuses a cross-origin cancel without touching the row', async () => {
     const { payload } = await sealedSecret('cancel origin');
-    const created = await create({ payload, expiresIn: '7d' });
+    const created = await create({ authHash: TEST_AUTH_HASH, payload, expiresIn: '7d' });
     const controlToken = String(created.body.controlToken);
 
     const response = await cancelEndpoint({
@@ -373,13 +386,13 @@ describe('POST /api/secrets/cancel', () => {
 
 describe('the two links, end to end', () => {
   it('keeps the content key out of every response the server sends', async () => {
-    const { payload, keyText } = await sealedSecret('end to end');
-    const proof = generateToken();
-    const created = await create({ payload, expiresIn: '1d', verifier: await dummyVerifier(), revealProofHash: hashToken(proof) });
+    const { payload, keyText, authKey, authHash } = await sealedSecret('end to end');
+    const created = await create({ payload, expiresIn: '1d', authHash });
     const controlToken = String(created.body.controlToken);
 
-    const statuses = [await reveal({ token: String(created.body.token), revealProof: proof })];
-    expect(statuses[0]?.body.payload).toBe(payload);
+    const revealed = await reveal({ token: String(created.body.token), authKey });
+    expect(revealed.body.payload).toBe(payload);
+    expect(revealed.text).not.toContain(keyText);
 
     const link = shareLink(ORIGIN, String(created.body.token), keyText);
     // Only the page composes the fragment, and it does it from memory.

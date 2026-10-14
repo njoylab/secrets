@@ -11,9 +11,17 @@
  * sent here; this module stores and returns that opaque `payload` verbatim. The
  * outer one is `encryptSecret` from `src/lib/crypto.ts`, under the deployment
  * key, so a database dump is still not the text.
+ *
+ * The browser derives an auth key from the fragment key and, when set, the
+ * password, and sends its SHA-256 at creation. Every row stores `auth_hash`, an
+ * HMAC-SHA256 of that hash under a subkey of the deployment key, so a database
+ * dump without the deployment key cannot be used to test passwords offline, not
+ * even together with the share link. A reveal must present the auth key before
+ * the delete runs, so a wrong password or a damaged fragment key is refused
+ * without consuming anything, and each guess costs one rate limited request.
  */
 import { Buffer } from 'node:buffer';
-import { timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { query, withClient } from './db.ts';
 import { getConfig } from './env.ts';
 import {
@@ -23,13 +31,18 @@ import {
   generateToken,
   hashToken,
   isValidTokenShape,
+  keyAuthHash,
 } from './crypto.ts';
 import {
   CONTENT_NONCE_BYTES,
   CONTENT_TAG_BYTES,
   PASSWORD_MAX_LENGTH,
+  decodeAuthKey,
   isSealedEnvelope,
 } from './content-crypto.ts';
+import { RECEIPT_RETENTION_DAYS } from './cleanup.mjs';
+
+export { RECEIPT_RETENTION_DAYS };
 
 /** Unpadded base64url length of `byteLength` bytes. */
 function base64UrlLength(byteLength: number): number {
@@ -52,18 +65,9 @@ export const MAX_PAYLOAD_BYTES = base64UrlLength(MAX_SECRET_BYTES + CONTENT_NONC
 
 export const MAX_PASSWORD_LENGTH = PASSWORD_MAX_LENGTH;
 
-/**
- * Largest sealed verifier the browser may store.
- *
- * The verifier plaintext carries a short prefix and a random reveal proof.
- * The ceiling refuses a second copy of the secret smuggled in this field.
- */
-const MAX_VERIFIER_PLAINTEXT_BYTES = 128;
-const MAX_VERIFIER_DECODED = CONTENT_NONCE_BYTES + CONTENT_TAG_BYTES + MAX_VERIFIER_PLAINTEXT_BYTES;
-export const MAX_VERIFIER_BYTES = base64UrlLength(MAX_VERIFIER_DECODED);
-
-/** How long a receipt is kept after the secret closed. */
-export const RECEIPT_RETENTION_DAYS = 7;
+/** Lowercase hex SHA-256 of the auth key, and the stored HMAC of it. */
+const AUTH_HASH_SHAPE = /^[0-9a-f]{64}$/;
+const AUTH_HASH_LENGTH = 64;
 
 /** The only accepted expiries: a preset, never an arbitrary number of days. */
 export const EXPIRY_PRESETS = ['1h', '1d', '7d', '30d'] as const;
@@ -93,15 +97,15 @@ const JSON_ESCAPE_FACTOR = 6;
 const JSON_ENVELOPE_BYTES = 256;
 
 /**
- * Body ceiling for `POST /api/secrets`: a full size payload plus a verifier.
+ * Body ceiling for `POST /api/secrets`: a full size payload plus the auth hash.
  *
  * The password is not part of this body. It stays in the browser and is mixed
- * into the content key there.
+ * into the derived keys there.
  */
-export const MAX_CREATE_BODY_BYTES = MAX_PAYLOAD_BYTES + MAX_VERIFIER_BYTES + JSON_ENVELOPE_BYTES;
+export const MAX_CREATE_BODY_BYTES = MAX_PAYLOAD_BYTES + AUTH_HASH_LENGTH + JSON_ENVELOPE_BYTES;
 
 /**
- * Body ceiling for `POST /api/secrets/reveal`: a token and a reveal proof, never the
+ * Body ceiling for `POST /api/secrets/reveal`: a token and an auth key, never the
  * payload. Kept small on purpose so a reveal request cannot be used to push
  * megabytes of arbitrary content into the process.
  */
@@ -111,14 +115,11 @@ export const MAX_REVEAL_BODY_BYTES =
 /** Body ceiling for `POST /api/secrets/cancel`: one control token and nothing else. */
 export const MAX_CANCEL_BODY_BYTES = TOKEN_LENGTH * JSON_ESCAPE_FACTOR + JSON_ENVELOPE_BYTES;
 
-/** Body ceiling for `POST /api/secrets/verifier`: one share token and nothing else. */
-export const MAX_VERIFIER_BODY_BYTES = TOKEN_LENGTH * JSON_ESCAPE_FACTOR + JSON_ENVELOPE_BYTES;
-
 export type SecretErrorCode =
   | 'payloadRequired'
   | 'payloadTooLong'
   | 'invalidPayload'
-  | 'invalidVerifier'
+  | 'invalidAuth'
   | 'invalidExpiry';
 
 export class SecretValidationError extends Error {
@@ -136,12 +137,16 @@ export interface CreateSecretInput {
   readonly payload: string;
   readonly expiresIn: ExpiryPreset;
   /**
-   * Sealed password check, produced by the browser under the same key as the
-   * payload. Absent when the secret has no password. The password itself is
-   * never a field of this input.
+   * Hex SHA-256 of the browser-derived auth key. Required for every secret. It
+   * is stored only as an HMAC under a subkey of the deployment key.
    */
-  readonly verifier?: string;
-  readonly revealProofHash?: string;
+  readonly authHash: string;
+  /**
+   * Whether the browser mixed a password into the keys. It only decides whether
+   * the open page asks for one: the auth hash is what actually enforces it. The
+   * password itself is never a field of this input.
+   */
+  readonly passwordProtected?: boolean;
 }
 
 export interface CreatedSecret {
@@ -152,7 +157,8 @@ export interface CreatedSecret {
 
 export type PasswordMode = 'none' | 'client';
 
-export type RevealFailure = 'unavailable' | 'bad_password' | 'undecryptable';
+/** `bad_key` is a failed auth key on a secret without a password. */
+export type RevealFailure = 'unavailable' | 'bad_password' | 'bad_key' | 'undecryptable';
 
 export type RevealResult =
   | { readonly ok: true; readonly payload: string }
@@ -184,13 +190,11 @@ export type CancelResult =
 
 interface SecretRow {
   ciphertext: string;
-  password_hash: string | null;
-  password_verifier: string | null;
-  reveal_proof_hash: string | null;
+  auth_hash: string;
+  has_password: boolean;
 }
 
 interface ConsumedRow {
-  ciphertext: string;
   control_hash: string | null;
   expires_at: Date;
 }
@@ -235,17 +239,25 @@ function validatePayload(raw: unknown): string {
   return raw;
 }
 
-/** A browser verifier, or `undefined` when the secret has no password. */
-function validateVerifier(raw: unknown): string | undefined {
-  if (raw === undefined || raw === null || raw === '') return undefined;
-  if (typeof raw !== 'string') {
-    throw new SecretValidationError('invalidVerifier', 'Verifier must be a string');
-  }
-  const byteLength = Buffer.byteLength(raw, 'utf8');
-  if (byteLength > MAX_VERIFIER_BYTES || !isSealedEnvelope(raw, MAX_VERIFIER_DECODED)) {
-    throw new SecretValidationError('invalidVerifier', 'Verifier is not a sealed envelope');
+function validateAuthHash(raw: unknown): string {
+  if (typeof raw !== 'string' || !AUTH_HASH_SHAPE.test(raw)) {
+    throw new SecretValidationError('invalidAuth', 'Auth hash must be 64 lowercase hex characters');
   }
   return raw;
+}
+
+function validatePasswordFlag(raw: unknown): boolean {
+  if (raw === undefined) return false;
+  if (typeof raw !== 'boolean') {
+    throw new SecretValidationError('invalidAuth', 'Password flag must be a boolean');
+  }
+  return raw;
+}
+
+/** Stored form of a well formed auth key, or `null` when the text is not one. */
+function storedAuthHashForKey(raw: unknown, encryptionKey: Buffer): string | null {
+  const bytes = decodeAuthKey(raw);
+  return bytes ? keyAuthHash(createHash('sha256').update(bytes).digest(), encryptionKey) : null;
 }
 
 /** Only the four presets pass. No coercion: `7` is not `7d`. */
@@ -262,12 +274,8 @@ function validateExpiryPreset(raw: unknown): ExpiryPreset {
 export async function createSecret(input: CreateSecretInput): Promise<CreatedSecret> {
   const payload = validatePayload(input.payload);
   const expiresIn = validateExpiryPreset(input.expiresIn);
-  const verifier = validateVerifier(input.verifier);
-  const proofHash = input.revealProofHash;
-  if ((verifier !== undefined && (typeof proofHash !== 'string' || !/^[0-9a-f]{64}$/.test(proofHash))) ||
-      (verifier === undefined && proofHash !== undefined)) {
-    throw new SecretValidationError('invalidVerifier', 'Invalid reveal proof hash');
-  }
+  const authHash = validateAuthHash(input.authHash);
+  const hasPassword = validatePasswordFlag(input.passwordProtected);
 
   const token = generateToken();
   const controlToken = generateToken();
@@ -277,15 +285,13 @@ export async function createSecret(input: CreateSecretInput): Promise<CreatedSec
   // layer protects the stored value without ever being able to open it.
   const key = getConfig().encryptionKey;
   const ciphertext = encryptSecret(payload, key);
-  // The verifier is the same kind of opaque envelope. Wrapping it keeps a
-  // database dump from using it as an offline password oracle on its own.
-  const verifierCiphertext = verifier === undefined ? null : encryptSecret(verifier, key);
+  const storedAuthHash = keyAuthHash(Buffer.from(authHash, 'hex'), key);
 
   const { rows } = await query<{ expires_at: Date }>(
-    `INSERT INTO secrets (token_hash, control_hash, ciphertext, password_hash, password_verifier, expires_at, reveal_proof_hash)
-     VALUES ($1, $2, $3, NULL, $4, now() + make_interval(secs => $5::double precision), $6)
+    `INSERT INTO secrets (token_hash, control_hash, ciphertext, auth_hash, has_password, expires_at)
+     VALUES ($1, $2, $3, $4, $5, now() + make_interval(secs => $6::double precision))
      RETURNING expires_at`,
-    [tokenHash, controlHash, ciphertext, verifierCiphertext, EXPIRY_PRESET_SECONDS[expiresIn], proofHash ?? null],
+    [tokenHash, controlHash, ciphertext, storedAuthHash, hasPassword, EXPIRY_PRESET_SECONDS[expiresIn]],
   );
 
   const expiresAt = rows[0]?.expires_at;
@@ -295,57 +301,15 @@ export async function createSecret(input: CreateSecretInput): Promise<CreatedSec
 
 export async function peekSecretPresence(token: string): Promise<{ password: PasswordMode } | null> {
   if (!isValidTokenShape(token)) return null;
-  const { rows } = await query<{
-    password_hash: string | null;
-    password_verifier: string | null;
-    reveal_proof_hash: string | null;
-    is_expired: boolean;
-  }>(
-    `SELECT password_hash,
-            password_verifier,
-            reveal_proof_hash,
-            expires_at <= now() AS is_expired
+  const { rows } = await query<{ has_password: boolean; is_expired: boolean }>(
+    `SELECT has_password, expires_at <= now() AS is_expired
        FROM secrets
       WHERE token_hash = $1`,
     [hashToken(token)],
   );
   const row = rows[0];
   if (!row || row.is_expired) return null;
-  if (row.password_hash !== null ||
-      (row.password_verifier === null) !== (row.reveal_proof_hash === null)) return null;
-  if (row.password_verifier !== null) return { password: 'client' };
-  return { password: 'none' };
-}
-
-export type VerifierRead =
-  | { readonly ok: true; readonly verifier: string }
-  | { readonly ok: false; readonly reason: 'unavailable' | 'undecryptable' };
-
-/**
- * Return the password verifier without deleting the secret.
- *
- * The browser decrypts this blob with the password-derived key before it asks
- * to reveal. A wrong password stops there, so the row stays. The blob is not
- * the secret: revealing still requires the deleting statement.
- */
-export async function readPasswordVerifier(token: string): Promise<VerifierRead> {
-  if (!isValidTokenShape(token)) return { ok: false, reason: 'unavailable' };
-  const { rows } = await query<{ password_verifier: string | null }>(
-    `SELECT password_verifier
-       FROM secrets
-      WHERE token_hash = $1
-        AND password_hash IS NULL
-        AND reveal_proof_hash IS NOT NULL
-        AND expires_at > now()`,
-    [hashToken(token)],
-  );
-  const stored = rows[0]?.password_verifier;
-  if (!stored) return { ok: false, reason: 'unavailable' };
-  try {
-    return { ok: true, verifier: decryptSecret(stored, getConfig().encryptionKey) };
-  } catch {
-    return { ok: false, reason: 'undecryptable' };
-  }
+  return { password: row.has_password ? 'client' : 'none' };
 }
 
 /**
@@ -447,25 +411,32 @@ export async function cancelSecret(controlToken: string): Promise<CancelResult> 
 /**
  * Reveal a payload exactly once.
  *
- * Sequence: read the row without a lock, verify the password outside any
- * transaction, decrypt the outer layer that was just read, and only then attempt
- * the atomic conditional delete that also writes the close receipt.
+ * Sequence: read the row without a lock, check the auth key against the stored
+ * keyed hash and decrypt the outer layer that was just read, both outside any
+ * transaction, and only then attempt the atomic conditional delete that also
+ * writes the close receipt.
  *
- * Decryption comes before the delete on purpose. A wrong key or a corrupted
- * ciphertext makes the GCM tag fail, and deleting first would destroy a secret
- * that nobody has read yet. A failure here is reported as `undecryptable` and
- * the row is left in place: restoring the key makes the link work again.
+ * A wrong auth key means a wrong password or a damaged fragment key: either way
+ * the browser could not open the payload, so the row stays. The password key
+ * derivation happens in the browser, so no lock is ever held across it.
  *
- * A failing password never reaches the decrypt or the delete, so it cannot
- * consume the secret.
+ * Decryption comes before the delete on purpose. A wrong deployment key or a
+ * corrupted ciphertext makes the GCM tag fail, and deleting first would destroy
+ * a secret that nobody has read yet. A failure here is reported as
+ * `undecryptable` and the row is left in place: restoring the key makes the
+ * link work again.
+ *
+ * The stored hash is keyed by the same deployment key, so a wrong deployment key
+ * also fails the auth comparison. Decryption therefore decides first: a GCM
+ * failure reports `undecryptable`, never a password error the user cannot fix.
  */
-export async function revealSecret(token: string, revealProof?: string): Promise<RevealResult> {
+export async function revealSecret(token: string, authKey: unknown): Promise<RevealResult> {
   if (!isValidTokenShape(token)) return { ok: false, reason: 'unavailable' };
 
   const tokenHash = hashToken(token);
 
   const { rows: candidates } = await query<SecretRow>(
-    `SELECT ciphertext, password_hash, password_verifier, reveal_proof_hash
+    `SELECT ciphertext, auth_hash, has_password
        FROM secrets
       WHERE token_hash = $1
         AND expires_at > now()`,
@@ -473,39 +444,37 @@ export async function revealSecret(token: string, revealProof?: string): Promise
   );
   const candidate = candidates[0];
   if (!candidate) return { ok: false, reason: 'unavailable' };
-  if (candidate.password_hash !== null ||
-      (candidate.password_verifier === null) !== (candidate.reveal_proof_hash === null)) {
-    return { ok: false, reason: 'unavailable' };
-  }
 
-  // A v2 verifier seals a random proof under the password-derived key. Only
-  // its hash is stored here; possession of the share token alone is insufficient.
-  if (candidate.reveal_proof_hash !== null) {
-    if (typeof revealProof !== 'string' || !isValidTokenShape(revealProof) ||
-        !timingSafeEqual(Buffer.from(hashToken(revealProof), 'hex'), Buffer.from(candidate.reveal_proof_hash, 'hex'))) {
-      return { ok: false, reason: 'bad_password' };
-    }
-  }
+  const encryptionKey = getConfig().encryptionKey;
+  const presented = storedAuthHashForKey(authKey, encryptionKey);
+  const authorized = presented !== null &&
+    timingSafeEqual(Buffer.from(presented, 'hex'), Buffer.from(candidate.auth_hash, 'hex'));
 
   // A wrong key or a tampered payload lands here. Nothing is logged: the
-  // ciphertext, the token, the password and the payload are all off limits.
+  // ciphertext, the token, the auth key and the payload are all off limits.
   let payload: string;
   try {
-    payload = decryptSecret(candidate.ciphertext, getConfig().encryptionKey);
+    payload = decryptSecret(candidate.ciphertext, encryptionKey);
   } catch {
     return { ok: false, reason: 'undecryptable' };
+  }
+
+  if (!authorized) {
+    return { ok: false, reason: candidate.has_password ? 'bad_password' : 'bad_key' };
   }
 
   const consumed = await withClient(async (client) => {
     await client.query('BEGIN');
     try {
+      // Guarding on the verified hash as well keeps the delete tied to the
+      // credential that was just checked, not only to the token.
       const { rows } = await client.query<ConsumedRow>(
         `DELETE FROM secrets
           WHERE token_hash = $1
             AND expires_at > now()
-            AND reveal_proof_hash IS NOT DISTINCT FROM $2::text
-          RETURNING ciphertext, control_hash, expires_at`,
-        [tokenHash, candidate.reveal_proof_hash],
+            AND auth_hash = $2
+          RETURNING control_hash, expires_at`,
+        [tokenHash, candidate.auth_hash],
       );
       const row = rows[0];
       if (row?.control_hash) {
@@ -523,78 +492,5 @@ export async function revealSecret(token: string, revealProof?: string): Promise
   // the read and the delete. Either way this caller gets nothing and the payload
   // it already holds is discarded.
   if (!consumed) return { ok: false, reason: 'unavailable' };
-
-  if (consumed.ciphertext !== candidate.ciphertext) {
-    // Unreachable today: the delete is the only writer of this column and
-    // nothing updates it in place, so the two values are always the same string.
-    // The row is gone either way, so refusing here would report a consumed
-    // secret as unavailable and destroy it. The deleted payload is the one this
-    // caller has just consumed, so decrypt that instead of discarding it.
-    try {
-      return { ok: true, payload: decryptSecret(consumed.ciphertext, getConfig().encryptionKey) };
-    } catch {
-      return { ok: false, reason: 'undecryptable' };
-    }
-  }
-
   return { ok: true, payload };
-}
-
-/**
- * Remove expired secrets, write their receipts, drop spent receipts and stale
- * rate limit counters.
- *
- * The receipt insert runs in the same statement as the delete so an expired row
- * and the record that explains its control link appear together. `ON CONFLICT`
- * is allowed only here: this is a maintenance job that must not fail wholesale,
- * and a collision there can only mean a 256-bit token repeated.
- *
- * The counts reported are the rows each statement deleted: expired secrets, spent
- * receipts and idle counters. Receipts written by the first statement are not
- * counted, because a maintenance report is about what was removed.
- */
-export async function purgeExpired(
-  olderThanSeconds: number,
-): Promise<{ secrets: number; receipts: number; counters: number }> {
-  const removed = await query<{ secrets: string; receipts: string }>(
-    `WITH deleted AS (
-       DELETE FROM secrets WHERE expires_at <= now()
-       RETURNING control_hash, expires_at
-     ), receipts AS (
-       INSERT INTO secret_receipts (control_hash, state, expires_at, closed_at, purge_after)
-       SELECT control_hash,
-              'expired',
-              expires_at,
-              now(),
-              GREATEST(expires_at, now() + make_interval(days => $1::int))
-         FROM deleted
-        WHERE control_hash IS NOT NULL
-       ON CONFLICT (control_hash) DO NOTHING
-       RETURNING 1
-     )
-     SELECT (SELECT count(*) FROM deleted)::text AS secrets,
-            (SELECT count(*) FROM receipts)::text AS receipts`,
-    [RECEIPT_RETENTION_DAYS],
-  );
-  const receipts = await query<{ count: string }>(
-    `WITH deleted AS (
-       DELETE FROM secret_receipts WHERE purge_after <= now() RETURNING 1
-     )
-     SELECT count(*)::text AS count FROM deleted`,
-  );
-  const counters = await query<{ count: string }>(
-    `WITH deleted AS (
-       DELETE FROM rate_limits
-        WHERE window_started_at <= now() - make_interval(secs => $1::double precision)
-        RETURNING 1
-     )
-     SELECT count(*)::text AS count FROM deleted`,
-    [olderThanSeconds],
-  );
-
-  return {
-    secrets: Number.parseInt(removed.rows[0]?.secrets ?? '0', 10),
-    receipts: Number.parseInt(receipts.rows[0]?.count ?? '0', 10),
-    counters: Number.parseInt(counters.rows[0]?.count ?? '0', 10),
-  };
 }

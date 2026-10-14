@@ -17,13 +17,14 @@ const t = getDictionary(Astro.locals.locale);
 
 <script>
   import {
-    createPasswordVerifier,
     controlUrl,
-    derivePasswordKey,
+    deriveSecretKeys,
     encodeShareFragment,
     encryptPayload,
     generateContentKey,
     generatePasswordSalt,
+    hashAuthKey,
+    normalizedPasswordLength,
     shareUrl,
   } from '../lib/content-crypto.ts';
   import { encodeQr, type QrSymbol } from '../lib/qr.ts';
@@ -267,7 +268,8 @@ const t = getDictionary(Astro.locals.locale);
       if (!presets.includes(expiry.value)) {
         return { field: expiry, message: formData.errorInvalidExpiry ?? '' };
       }
-      if (passwordMax > 0 && password.value.length > passwordMax) {
+      // Measured after NFKC, exactly as the key derivation measures it.
+      if (passwordMax > 0 && normalizedPasswordLength(password.value) > passwordMax) {
         return { field: password, message: formData.errorPasswordTooLong ?? '' };
       }
       return null;
@@ -339,28 +341,20 @@ const t = getDictionary(Astro.locals.locale);
       setButtonLabel(submit, submitBusy);
 
       try {
-        // Sealed here, before anything leaves the browser. The key is generated
-        // per secret. A password is mixed into that key and is not in the body.
+        // Sealed here, before anything leaves the browser. The fragment key is
+        // generated per secret; a password is mixed into the derived keys and
+        // is not in the body. Only the hash of the auth key is sent.
         const key = generateContentKey();
-        let sealingKey = key;
-        let verifier: string | undefined;
-        let revealProofHash: string | undefined;
-        if (suppliedPassword.length > 0) {
-          const salt = generatePasswordSalt();
-          sealingKey = await derivePasswordKey(key, suppliedPassword, salt);
-          ({ verifier, revealProofHash } = await createPasswordVerifier(sealingKey));
-          keyFragment = encodeShareFragment(key, salt);
-        } else {
-          keyFragment = encodeShareFragment(key);
-        }
-        const payload = await encryptPayload(secret.value, sealingKey);
-
-        const body: { payload: string; expiresIn: string; verifier?: string; revealProofHash?: string } = {
-          payload,
+        const hasPassword = suppliedPassword.length > 0;
+        const salt = hasPassword ? generatePasswordSalt() : null;
+        const { contentKey, authKey } = await deriveSecretKeys(key, hasPassword ? suppliedPassword : null, salt);
+        keyFragment = encodeShareFragment(key, salt);
+        const body = {
+          payload: await encryptPayload(secret.value, contentKey),
           expiresIn: preset,
+          authHash: await hashAuthKey(authKey),
+          passwordProtected: hasPassword,
         };
-        if (verifier) body.verifier = verifier;
-        if (revealProofHash) body.revealProofHash = revealProofHash;
 
         const response = await fetch('/api/secrets', {
           method: 'POST',

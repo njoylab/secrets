@@ -1,0 +1,20 @@
+---
+import Panel from '../components/Panel.astro';
+import Layout from '../layouts/Layout.astro';
+import { getDictionary } from '../lib/i18n.ts';
+
+// Rendered per request so the middleware's locale applies and Astro attaches
+// its page CSP with the hashes of the inlined styles.
+export const prerender = false;
+
+const t = getDictionary(Astro.locals.locale);
+Astro.response.status = 404;
+---
+
+<Layout title={t.notFound.title}>
+  <h1 class="page-title">{t.notFound.title}</h1>
+  <Panel>
+    <p class="notice-message">{t.notFound.message}</p>
+    <a class="btn btn-primary align-start" href="/">{t.notFound.home}</a>
+  </Panel>
+</Layout>

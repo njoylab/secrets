@@ -4,11 +4,15 @@
  * Invariants:
  * - tokens carry 256 bits of randomness and are never stored, only hashed;
  * - secret content is sealed with AES-256-GCM under a random 96-bit nonce;
+ * - stored auth hashes are keyed with an HMAC subkey derived from the deployment
+ *   key, never with the AES key bytes themselves.
  */
 import {
   createCipheriv,
   createDecipheriv,
   createHash,
+  createHmac,
+  hkdfSync,
   randomBytes,
 } from 'node:crypto';
 import { Buffer } from 'node:buffer';
@@ -54,4 +58,30 @@ export function decryptSecret(payload: string, key: Buffer): string {
   const decipher = createDecipheriv('aes-256-gcm', key, nonce, { authTagLength: AUTH_TAG_BYTES });
   decipher.setAuthTag(authTag);
   return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
+}
+
+/** HKDF `info` label of the subkey that keys stored auth hashes. */
+export const AUTH_HMAC_INFO = 'echovalue-secrets-v3:auth-hmac';
+
+const AUTH_HMAC_KEY_BYTES = 32;
+
+// Keyed by the Buffer instance, so a reloaded config (a new key Buffer) derives
+// a fresh subkey and a dropped config releases its entry.
+const authHmacKeys = new WeakMap<Buffer, Buffer>();
+
+function authHmacKey(encryptionKey: Buffer): Buffer {
+  let subkey = authHmacKeys.get(encryptionKey);
+  if (!subkey) {
+    subkey = Buffer.from(hkdfSync('sha256', encryptionKey, Buffer.alloc(0), AUTH_HMAC_INFO, AUTH_HMAC_KEY_BYTES));
+    authHmacKeys.set(encryptionKey, subkey);
+  }
+  return subkey;
+}
+
+/**
+ * Hex HMAC-SHA256 of a 32-byte auth hash under the deployment's auth subkey.
+ * The result has the same 64-hex shape as the input, which the schema enforces.
+ */
+export function keyAuthHash(authHash: Buffer, encryptionKey: Buffer): string {
+  return createHmac('sha256', authHmacKey(encryptionKey)).update(authHash).digest('hex');
 }

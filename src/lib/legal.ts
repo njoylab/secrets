@@ -124,7 +124,7 @@ export type LegalDocumentKind = 'privacy' | 'terms';
 const privacyIt: LegalDocument = {
   title: 'Informativa privacy',
   summary: 'Quali dati trattiamo, per quanto tempo e come esercitare i tuoi diritti.',
-  updated: '2026-10-05',
+  updated: '2026-10-14',
   sections: [
     {
       heading: 'Titolare e finalità',
@@ -141,7 +141,7 @@ const privacyIt: LegalDocument = {
         {
           kind: 'list',
           items: [
-            'Contenuto cifrato, impronte dei token, dati di verifica della password e date di creazione e scadenza.',
+            'Contenuto cifrato, impronte dei token, impronta della chiave di verifica, indicazione della password e date di creazione e scadenza.',
             'Stato e data di lettura, annullamento o scadenza, consultabili dal link di controllo.',
             'Indirizzo IP in chiaro nei contatori che limitano creazioni, letture e annullamenti.',
             'Un cookie per ricordare la lingua scelta, valido un anno. Un CDN o un reverse proxy a monte può impostare altri cookie tecnici, secondo le funzioni attive su quella distribuzione.',
@@ -154,7 +154,7 @@ const privacyIt: LegalDocument = {
       blocks: [
         {
           kind: 'p',
-          text: 'Il browser cifra il testo prima di inviarlo. La chiave resta nel link, dopo #, e non arriva al server. La password resta nel browser. Il server autorizza la lettura solo dopo la verifica della password, se impostata. Chi ha il link completo può aprire il segreto, con la password se impostata.',
+          text: 'Il browser cifra il testo prima di inviarlo. La chiave resta nel link, dopo #, e non arriva al server. La password resta nel browser. Il server autorizza la lettura solo dopo aver verificato che il browser abbia la chiave corretta e, se impostata, la password. Chi ha il link completo può aprire il segreto, con la password se impostata.',
         },
         {
           kind: 'p',
@@ -211,7 +211,7 @@ const privacyIt: LegalDocument = {
 const privacyEn: LegalDocument = {
   title: 'Privacy policy',
   summary: 'What data we process, how long we keep it and how to exercise your rights.',
-  updated: '2026-10-05',
+  updated: '2026-10-14',
   sections: [
     {
       heading: 'Controller and purposes',
@@ -228,7 +228,7 @@ const privacyEn: LegalDocument = {
         {
           kind: 'list',
           items: [
-            'Encrypted content, token hashes, password verification data, and creation and expiry dates.',
+            'Encrypted content, token hashes, a hash of the verification key, whether a password is set, and creation and expiry dates.',
             'The status and time of a read, cancellation or expiry, available through the control link.',
             'Your IP address in cleartext in counters that limit creations, reads and cancellations.',
             'A cookie that remembers your language choice for one year. A CDN or reverse proxy in front may set other technical cookies, depending on the features enabled on that deployment.',
@@ -241,7 +241,7 @@ const privacyEn: LegalDocument = {
       blocks: [
         {
           kind: 'p',
-          text: 'The browser encrypts the text before sending it. The key stays in the link, after #, and never reaches the server. The password stays in the browser. The server authorizes reading only after password verification, if a password is set. Anyone with the complete link can open the secret, with the password if set.',
+          text: 'The browser encrypts the text before sending it. The key stays in the link, after #, and never reaches the server. The password stays in the browser. The server authorizes reading only after verifying that the browser holds the correct key and, if set, the password. Anyone with the complete link can open the secret, with the password if set.',
         },
         {
           kind: 'p',

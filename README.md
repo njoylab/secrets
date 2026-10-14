@@ -3,9 +3,11 @@
 A minimal service for sharing text through one-time links, with expiration,
 optional passwords, and a separate control link to check status or cancel.
 
-The browser encrypts the text with AES-256-GCM before sending it. The content key
-stays in the share-link fragment; the server stores only a sealed payload, wrapped
-in a second encryption layer under a deployment key. Passwords stay in the browser.
+The browser encrypts the text with AES-256-GCM before sending it. The key stays in
+the share-link fragment; the server stores only a sealed payload, wrapped in a
+second encryption layer under a deployment key, and the hash of a separate auth
+key derived from the fragment key and the optional password. Passwords stay in the
+browser, and a wrong one never consumes the secret.
 This is client-side encryption, **not audited end-to-end encryption**: the service
 operator can change the JavaScript delivered to users.
 
@@ -75,8 +77,11 @@ npm start
 Configure runtime secrets in your process manager. `npm start` applies migrations
 before accepting traffic and runs the required `server.mjs` wrapper. Put a TLS
 reverse proxy in front, configure `TRUSTED_PROXIES` to match its actual addresses,
-keep the app port private, and schedule `npm run cleanup` hourly. Without trusted
-proxy configuration, users behind that proxy share one rate-limit quota.
+keep the app port private, and schedule `npm run cleanup` hourly. Migration
+`0005_auth_key.sql` closes every live link created before it; see the operations
+guide before upgrading. Without trusted
+proxy configuration, users behind that proxy share one rate-limit quota. IPv6
+clients are counted per /64, so a whole IPv6 subnet shares one quota.
 
 Before public use, replace the operator placeholders and deployment-specific
 statements in `src/lib/legal.ts`. Check log redaction, backup retention, recovery,
@@ -89,9 +94,14 @@ sensitive and send any password separately. A control link cannot read content.
 
 - Consumption commits before delivery. A lost response or failed client
   decryption cannot be retried; the control link reports `read`.
-- Reloading after the fragment is removed loses the in-memory key. Reopen the
-  original share link. Changing language preserves the key in client-side
-  fragments and never sends it to the server.
+- A wrong password or a damaged key is refused before deletion, so it consumes
+  nothing. Each password guess is a reveal request and counts against the reveal
+  rate limit. The stored auth hash is keyed with the deployment key, so a
+  database dump, even together with the link, does not allow offline guessing;
+  someone who also holds `SECRET_ENCRYPTION_KEY` can still guess offline.
+- Reloading after the fragment is removed loses the in-memory key, but consumes
+  nothing: reopen the original share link. Changing language preserves the key in
+  client-side fragments and never sends it to the server.
 - Expiration blocks reads immediately; periodic cleanup removes expired rows.
 - Close receipts persist until `max(original expiry, closure + 7 days)`, then
   cleanup removes them.
@@ -152,6 +162,7 @@ when behavior changes. Update `src/lib/legal.ts` when stored data or retention c
 ## Documentation
 
 - [Security model and limitations](docs/security.md)
+- [Design notes](docs/design.md)
 - [Environment, migrations, cleanup, deployment and recovery](docs/operations.md)
 - [QR implementation and control timestamps](docs/qr.md)
 - [Security reporting policy](.github/SECURITY.md)

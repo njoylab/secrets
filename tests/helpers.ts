@@ -5,17 +5,20 @@
  * execution order; nothing here returns secret content, passwords or tokens.
  */
 import { Buffer } from 'node:buffer';
-import { hashToken } from '../src/lib/crypto.ts';
-import { query } from '../src/lib/db.ts';
+import { createHash } from 'node:crypto';
+import { hashToken, keyAuthHash } from '../src/lib/crypto.ts';
+import { getConfig } from '../src/lib/env.ts';
+import { getPool, query } from '../src/lib/db.ts';
+import { purgeExpired as runPurge, type PurgeResult } from '../src/lib/cleanup.mjs';
 import {
-  createPasswordVerifier,
-  openPasswordVerifier,
+  deriveSecretKeys,
+  encodeAuthKey,
   encodeContentKey,
   encodeShareFragment,
   encryptPayload,
   generateContentKey,
   generatePasswordSalt,
-  derivePasswordKey,
+  hashAuthKey,
   type ContentBytes,
 } from '../src/lib/content-crypto.ts';
 import { SecretValidationError } from '../src/lib/secrets.ts';
@@ -27,8 +30,8 @@ export interface SecretRow {
   token_hash: string;
   control_hash: string;
   ciphertext: string;
-  password_hash: string | null;
-  password_verifier: string | null;
+  auth_hash: string;
+  has_password: boolean;
   expires_at: Date;
   created_at: Date;
 }
@@ -48,9 +51,14 @@ export interface RateLimitRow {
   hits: number;
 }
 
+/** What `auth_hash` should hold for a client-sent auth hash under the current deployment key. */
+export function expectedStoredAuthHash(authHash: string): string {
+  return keyAuthHash(Buffer.from(authHash, 'hex'), getConfig().encryptionKey);
+}
+
 export async function fetchSecretRow(token: string): Promise<SecretRow | undefined> {
   const { rows } = await query<SecretRow>(
-    `SELECT token_hash, control_hash, ciphertext, password_hash, password_verifier, expires_at, created_at
+    `SELECT token_hash, control_hash, ciphertext, auth_hash, has_password, expires_at, created_at
        FROM secrets
       WHERE token_hash = $1`,
     [hashToken(token)],
@@ -184,55 +192,80 @@ export function fakePayload(secret: string): string {
 }
 
 /**
- * Seal a secret the way the browser does and hand back everything a test needs to
- * act as the client: the opaque payload the server stores, the key, and the text
- * form that travels in the link fragment.
+ * A fixed, well formed auth key and its stored hash, for tests about storage and
+ * lifecycle rather than key derivation. The server cannot tell it from a derived
+ * one: it only ever compares hashes.
  */
-export async function sealedSecret(secret: string): Promise<{
-  payload: string;
-  key: ContentBytes;
-  keyText: string;
-}> {
-  const key = generateContentKey();
-  return { payload: await encryptPayload(secret, key), key, keyText: encodeContentKey(key) };
-}
+const TEST_AUTH_KEY_BYTES = new Uint8Array(32).fill(7);
+export const TEST_AUTH_KEY = encodeAuthKey(TEST_AUTH_KEY_BYTES);
+export const TEST_AUTH_HASH = createHash('sha256').update(TEST_AUTH_KEY_BYTES).digest('hex');
 
-export const DUMMY_REVEAL_PROOF = 'A'.repeat(43);
-export const DUMMY_REVEAL_PROOF_HASH = hashToken(DUMMY_REVEAL_PROOF);
-
-/** A well formed verifier envelope. It does not bind a particular password. */
-export async function dummyVerifier(): Promise<string> {
-  return encryptPayload('echovalue-secrets-verifier-v2:' + DUMMY_REVEAL_PROOF, generateContentKey());
+export interface SealedSecret {
+  /** Opaque payload the server stores. */
+  readonly payload: string;
+  /** Fragment key, as in the share link. */
+  readonly key: ContentBytes;
+  readonly keyText: string;
+  /** Derived key that opens `payload`. */
+  readonly contentKey: ContentBytes;
+  /** Auth key text, as the reveal request carries it. */
+  readonly authKey: string;
+  /** Hex SHA-256 of the auth key, as the create request carries it. */
+  readonly authHash: string;
 }
 
 /**
- * Seal a secret the way the password form does: the payload and the verifier
- * share a key derived from the fragment key and the password.
+ * Seal a secret the way the browser does and hand back everything a test needs to
+ * act as the client: the opaque payload the server stores, the keys, and the text
+ * form that travels in the link fragment.
  */
+export async function sealedSecret(secret: string): Promise<SealedSecret> {
+  const key = generateContentKey();
+  const keys = await deriveSecretKeys(key, null, null);
+  return {
+    payload: await encryptPayload(secret, keys.contentKey),
+    key,
+    keyText: encodeContentKey(key),
+    contentKey: keys.contentKey,
+    authKey: encodeAuthKey(keys.authKey),
+    authHash: await hashAuthKey(keys.authKey),
+  };
+}
+
+/** Seal a secret the way the password form does. */
 export async function sealedPasswordSecret(
   secret: string,
   password: string,
-): Promise<{
-  payload: string;
-  verifier: string;
-  key: ContentBytes;
-  salt: ContentBytes;
-  fragment: string;
-  revealProof: string;
-  revealProofHash: string;
-}> {
+): Promise<SealedSecret & { salt: ContentBytes; fragment: string }> {
   const key = generateContentKey();
   const salt = generatePasswordSalt();
-  const derived = await derivePasswordKey(key, password, salt);
-  const check = await createPasswordVerifier(derived);
+  const keys = await deriveSecretKeys(key, password, salt);
   return {
-    payload: await encryptPayload(secret, derived),
-    ...check,
-    revealProof: await openPasswordVerifier(check.verifier, derived),
+    payload: await encryptPayload(secret, keys.contentKey),
     key,
+    keyText: encodeContentKey(key),
+    contentKey: keys.contentKey,
+    authKey: encodeAuthKey(keys.authKey),
+    authHash: await hashAuthKey(keys.authKey),
     salt,
     fragment: encodeShareFragment(key, salt),
   };
+}
+
+/**
+ * Run the cleanup exactly as `scripts/cleanup.mjs` does, through the shared module,
+ * against the suite's pool. Reports the deleted counts; `purgeWithReport` also
+ * returns the receipts written.
+ */
+export async function purgeWithReport(counterRetentionSeconds: number): Promise<PurgeResult> {
+  return runPurge(getPool(), counterRetentionSeconds);
+}
+
+export async function purgeExpired(
+  counterRetentionSeconds: number,
+): Promise<{ secrets: number; receipts: number; counters: number }> {
+  const { secrets, receipts, counters } = await purgeWithReport(counterRetentionSeconds);
+  return { secrets, receipts, counters };
 }
 
 /** The share link a recipient receives, key included: it never leaves the browser. */

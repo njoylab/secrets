@@ -8,7 +8,7 @@ export const GET: APIRoute = async ({ locals }) => {
   try {
     const { rows } = await query<{ ready: boolean }>(
       `SELECT EXISTS (
-         SELECT 1 FROM schema_migrations WHERE version = '0004_reveal_proof.sql'
+         SELECT 1 FROM schema_migrations WHERE version = '0005_auth_key.sql'
        ) AND to_regclass('public.secrets') IS NOT NULL
          AND to_regclass('public.secret_receipts') IS NOT NULL
          AND to_regclass('public.rate_limits') IS NOT NULL AS ready`,

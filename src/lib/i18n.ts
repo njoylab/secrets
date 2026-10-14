@@ -100,11 +100,12 @@ export type Dictionary = {
     payloadRequired: string;
     payloadTooLong: string;
     invalidPayload: string;
-    invalidVerifier: string;
+    invalidAuth: string;
     invalidExpiry: string;
     passwordTooLong: string;
     passwordRejected: string;
     badPassword: string;
+    badKey: string;
     unavailable: string;
     rateLimited: string;
     crossOrigin: string;
@@ -113,6 +114,11 @@ export type Dictionary = {
   };
   legal: {
     updated: string;
+  };
+  notFound: {
+    title: string;
+    message: string;
+    home: string;
   };
   footer: {
     limits: string;
@@ -181,7 +187,7 @@ const it: Dictionary = {
     reveal: 'Mostra segreto',
     revealing: 'Lettura…',
     unavailable: 'Link non disponibile',
-    missingKey: 'Link senza chiave',
+    missingKey: 'Chiave assente dall’indirizzo. Il segreto non è stato consumato: riapri il link originale.',
     keyFailed: 'Chiave non valida',
     noteSingleRead: 'Una sola lettura. Nessun recupero',
   },
@@ -217,11 +223,12 @@ const it: Dictionary = {
     payloadRequired: 'Inserisci un segreto',
     payloadTooLong: 'Limite 50 KiB',
     invalidPayload: 'Segreto non valido',
-    invalidVerifier: 'Verifica non valida',
+    invalidAuth: 'Verifica della chiave non valida',
     invalidExpiry: 'Scadenza non valida',
     passwordTooLong: 'Password troppo lunga',
     passwordRejected: 'Non inviare la password',
     badPassword: 'Password errata',
+    badKey: 'Chiave non corrispondente. Il segreto non è stato consumato.',
     unavailable: 'Link non disponibile',
     rateLimited: 'Troppe richieste. Riprova più tardi.',
     crossOrigin: 'Richiesta non consentita',
@@ -230,6 +237,12 @@ const it: Dictionary = {
   },
 
   legal: { updated: 'Ultimo aggiornamento' },
+
+  notFound: {
+    title: 'Pagina non trovata',
+    message: 'Questo indirizzo non esiste.',
+    home: 'Crea un nuovo segreto',
+  },
 
   footer: {
     limits: 'Limite 50 KiB · una sola lettura',
@@ -295,7 +308,7 @@ const en: Dictionary = {
     reveal: 'Reveal secret',
     revealing: 'Reading…',
     unavailable: 'Link unavailable',
-    missingKey: 'Link without a key',
+    missingKey: 'Key missing from the address. The secret was not consumed: open the original link again.',
     keyFailed: 'Invalid key',
     noteSingleRead: 'One read only. No recovery',
   },
@@ -331,11 +344,12 @@ const en: Dictionary = {
     payloadRequired: 'Enter a secret',
     payloadTooLong: '50 KiB limit',
     invalidPayload: 'Invalid secret',
-    invalidVerifier: 'Invalid verifier',
+    invalidAuth: 'Invalid key check',
     invalidExpiry: 'Invalid expiry',
     passwordTooLong: 'Password too long',
     passwordRejected: 'Do not send the password',
     badPassword: 'Incorrect password',
+    badKey: 'Key does not match. The secret was not consumed.',
     unavailable: 'Link unavailable',
     rateLimited: 'Too many requests. Try again later.',
     crossOrigin: 'Request not allowed',
@@ -344,6 +358,12 @@ const en: Dictionary = {
   },
 
   legal: { updated: 'Last updated' },
+
+  notFound: {
+    title: 'Page not found',
+    message: 'This address does not exist.',
+    home: 'Create a new secret',
+  },
 
   footer: {
     limits: '50 KiB limit · one read only',

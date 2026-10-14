@@ -8,7 +8,7 @@ the [security model](security.md) for cryptographic guarantees and limits.
 | Variable | Required | Default | Meaning |
 | --- | --- | --- | --- |
 | `DATABASE_URL` | yes | — | PostgreSQL connection string, e.g. `postgres://user:password@host:5432/database`. |
-| `SECRET_ENCRYPTION_KEY` | yes | — | AES-256-GCM key, 32 random bytes encoded base64url, used for the at-rest wrapper around the sealed payload. Held outside the database. Losing it makes every stored payload permanently unreadable. |
+| `SECRET_ENCRYPTION_KEY` | yes | — | AES-256-GCM key, 32 random bytes encoded base64url, used for the at-rest wrapper around the sealed payload and, through an HKDF subkey, to key the stored auth hashes. Held outside the database. Losing it makes every stored payload permanently unreadable. |
 | `TRUSTED_PROXIES` | no | empty (trust nobody) | Comma-separated addresses of the proxies you control, which are then allowed to supply `X-Forwarded-For`. |
 | `HOST` | no | `127.0.0.1` | Interface the Node adapter listens on; the process is meant to sit behind a reverse proxy on the loopback. |
 | `SERVER_CERT_PATH` | no | — | Path to the PEM certificate when running with TLS in-process. |
@@ -66,14 +66,20 @@ partial version marker. Re-running the command applies nothing and reports
 adds the `control_hash` column and its unique index, plus the `secret_receipts`
 table that remembers how a secret closed. `0003_password_verifier.sql` adds the
 browser-side password verifier; `0004_reveal_proof.sql` adds its authorization
-proof hash. The current app rejects legacy password records without a reveal
-proof; keep the historical migrations, but do not roll back to an implementation
-that ignores proofs. There is no down migration: rolling back would mean
-discarding secrets or state that no longer has meaning.
+proof hash. `0005_auth_key.sql` replaces both with `auth_hash` and `has_password`
+(see the [security model](security.md)). It is a clean cut: every row still in
+`secrets` is deleted, its control link gets a `cancelled` receipt (`expired` if
+it had already expired), and the `password_hash`, `password_verifier` and
+`reveal_proof_hash` columns are dropped. No ciphertext is copied anywhere. Links
+created before the upgrade stop working; tell users to create new ones. Keep the
+historical migrations, and do not roll back to an implementation that skips the
+auth key check. There is no down migration: rolling back would mean discarding
+secrets or state that no longer has meaning.
 
 ## Cleanup
 
-`npm run cleanup` does three things in one transaction each and prints the counts:
+`npm run cleanup` runs the SQL in `src/lib/cleanup.mjs`, the same module the test
+suite exercises. It does three things in one transaction each and prints the counts:
 
 - deletes expired rows from `secrets` and writes an `expired` receipt for each, so
   a control link keeps answering "expired" instead of "unavailable" after the row
@@ -208,4 +214,6 @@ reopening traffic; this also invalidates unread links. Require explicit operator
 approval for that destructive step. Never restore the database just to roll
 back code: retain the previous artifact and configuration and use
 forward-compatible migrations. Changing `SECRET_ENCRYPTION_KEY` invalidates
-every stored payload.
+every stored payload and every stored auth hash. Reveals then answer with a
+server error and consume nothing; restoring the previous key makes the links
+work again.

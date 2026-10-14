@@ -38,6 +38,7 @@ const presence = await peekSecretPresence(token);
             data-error-server={t.errors.serverError}
             data-error-bad-password={t.errors.badPassword}
             data-error-missing-key={t.open.missingKey}
+            data-error-bad-key={t.errors.badKey}
             data-error-key-failed={t.open.keyFailed}
           >
             {presence.password !== 'none' && (
@@ -104,12 +105,12 @@ const presence = await peekSecretPresence(token);
 
 <script>
   import {
-    openPasswordVerifier,
     decodeShareFragment,
-    encodeShareFragment,
     decryptPayload,
-    derivePasswordKey,
-    type ContentBytes,
+    deriveSecretKeys,
+    encodeAuthKey,
+    encodeShareFragment,
+    type SecretKeys,
   } from '../../lib/content-crypto.ts';
 
   interface RevealApiResponse {
@@ -168,7 +169,9 @@ const presence = await peekSecretPresence(token);
    *
    * The current history entry is replaced, so a later copy of the URL, a
    * synced history and a shared screen do not carry the content key. The key
-   * stays in this closure until the page is closed.
+   * stays in this closure until the page is closed, and is deliberately not
+   * persisted: after a reload the page asks for the original link again, and
+   * nothing has been consumed.
    */
   function takeFragment(): ReturnType<typeof decodeShareFragment> {
     const fragment = decodeShareFragment(window.location.hash.replace(/^#/, ''));
@@ -212,6 +215,7 @@ const presence = await peekSecretPresence(token);
     const serverError = form.dataset.errorServer ?? '';
     const badPassword = form.dataset.errorBadPassword ?? '';
     const missingKey = form.dataset.errorMissingKey ?? '';
+    const badKey = form.dataset.errorBadKey ?? '';
     const keyFailed = form.dataset.errorKeyFailed ?? '';
     const fragmentKey = openedFragment?.key ?? null;
     const salt = openedFragment?.salt ?? null;
@@ -264,8 +268,8 @@ const presence = await peekSecretPresence(token);
       event.preventDefault();
       if (revealed) return;
 
-      // Without a usable key the POST cannot produce anything readable, and it
-      // would consume the secret to prove it. Refuse before spending it.
+      // Without a usable key nothing readable can come back. The server would
+      // refuse the auth key anyway; this answers without a request.
       if (!fragmentKey) {
         fail(missingKey);
         return;
@@ -275,7 +279,7 @@ const presence = await peekSecretPresence(token);
         return;
       }
       if (passwordMode !== 'client' && salt) {
-        fail(keyFailed);
+        fail(badKey);
         return;
       }
 
@@ -285,8 +289,7 @@ const presence = await peekSecretPresence(token);
       submit.disabled = true;
       setButtonLabel(submit, revealBusy);
 
-      let openingKey: ContentBytes = fragmentKey;
-      let revealProof: string | undefined;
+      let keys: SecretKeys;
 
       try {
         if (passwordMode === 'client') {
@@ -296,21 +299,10 @@ const presence = await peekSecretPresence(token);
             if (password) password.focus();
             return;
           }
-          const check = await fetch('/api/secrets/verifier', {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ token }),
-          });
-          const checkBody = (await check.json()) as RevealApiResponse & { verifier?: string };
-          if (!check.ok || checkBody.ok !== true || typeof checkBody.verifier !== 'string') {
-            fail(typeof checkBody.message === 'string' ? checkBody.message : serverError);
-            return;
-          }
           try {
-            openingKey = await derivePasswordKey(fragmentKey, supplied, salt);
-            revealProof = await openPasswordVerifier(checkBody.verifier, openingKey);
+            keys = await deriveSecretKeys(fragmentKey, supplied, salt);
           } catch {
+            // Only an out of range password can fail here, and it cannot match.
             fail(badPassword);
             if (password) {
               password.focus();
@@ -318,10 +310,13 @@ const presence = await peekSecretPresence(token);
             }
             return;
           }
+        } else {
+          keys = await deriveSecretKeys(fragmentKey, null, null);
         }
 
-        const body: { token: string; revealProof?: string } = { token };
-        if (revealProof) body.revealProof = revealProof;
+        // The auth key proves the fragment key, and the password when set, to
+        // the server before it deletes anything. The content key stays here.
+        const body = { token, authKey: encodeAuthKey(keys.authKey) };
 
         const response = await fetch('/api/secrets/reveal', {
           method: 'POST',
@@ -333,11 +328,12 @@ const presence = await peekSecretPresence(token);
 
         if (response.ok && payload.ok === true && typeof payload.payload === 'string') {
           revealed = true;
-          // The row is already gone at this point: a failed tag means the key was
-          // altered in transit, and there is no second read to fall back on.
+          // The row is already gone at this point. The auth key matched, so a
+          // failed tag means the payload was not sealed under the content key
+          // derived from the same input, and there is no second read.
           let plaintext: string;
           try {
-            plaintext = await decryptPayload(payload.payload, openingKey);
+            plaintext = await decryptPayload(payload.payload, keys.contentKey);
           } catch {
             showConsumed(keyFailed);
             return;
