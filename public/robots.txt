@@ -1,0 +1,5 @@
+# Public pages may be indexed; token, control and API paths must not.
+User-agent: *
+Disallow: /api/
+Disallow: /s/
+Disallow: /c/

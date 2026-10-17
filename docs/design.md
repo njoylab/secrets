@@ -194,7 +194,8 @@ was not consumed, and the original link still works.
 
 - A strict Content-Security-Policy (`default-src 'self'`, hashed inline
   scripts and styles) protects the page that holds the key in memory.
-- `no-store` and `noindex` are set on every response.
+- `no-store` is set on every response; `noindex` on every response except the
+  public pages (`/`, `/how`, `/privacy`, `/terms`), which may be indexed.
 - Cross-origin POSTs are rejected before the body is read.
 - Forwarded client addresses are trusted only from configured proxies.
 - The locale redirect accepts only same-origin paths. Tab characters and dot

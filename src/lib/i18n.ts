@@ -3,6 +3,8 @@
  * validation errors and accessibility labels, resolves through `t()`.
  * Secret content is never routed through this module.
  */
+import { NOINDEX_ROBOTS } from './seo.ts';
+
 export type Locale = 'it' | 'en';
 
 /**
@@ -138,7 +140,7 @@ const it: Dictionary = {
   meta: {
     title: 'secrets',
     description: 'Condividi un segreto con un link monouso.',
-    robots: 'noindex, nofollow',
+    robots: NOINDEX_ROBOTS,
   },
   skipToContent: 'Vai al contenuto',
   javascriptRequired: 'Richiede JavaScript e una connessione sicura.',
@@ -260,7 +262,7 @@ const en: Dictionary = {
   meta: {
     title: 'secrets',
     description: 'Share a secret with a one-time link.',
-    robots: 'noindex, nofollow',
+    robots: NOINDEX_ROBOTS,
   },
   skipToContent: 'Skip to content',
   javascriptRequired: 'Requires JavaScript and a secure connection.',

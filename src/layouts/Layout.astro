@@ -2,6 +2,8 @@
 import '../styles/global.css';
 import { getDictionary } from '../lib/i18n.ts';
 import { getConfig } from '../lib/env.ts';
+import { requestOriginFrom } from '../lib/http.ts';
+import { robotsForPath } from '../lib/seo.ts';
 import LanguageSwitcher from '../components/LanguageSwitcher.astro';
 
 interface Props {
@@ -16,6 +18,30 @@ const t = getDictionary(locale);
 const sourceUrl = getConfig().sourceUrl;
 // Language links return to the current path, query string included.
 const next = `${Astro.url.pathname}${Astro.url.search}`;
+
+const pageTitle = `${title} · ${t.meta.title}`;
+const pageDescription = description ?? t.meta.description;
+// Only the public pages may be indexed; token pages and unknown paths stay out.
+const robots = robotsForPath(Astro.url.pathname);
+// The origin advertised in canonical and Open Graph links, as served.
+const origin = requestOriginFrom(Astro.request);
+const canonical = origin === 'null' ? null : `${origin}${Astro.url.pathname}`;
+const ogLocale = locale === 'it' ? 'it_IT' : 'en_US';
+const ogLocaleAlternate = locale === 'it' ? 'en_US' : 'it_IT';
+// Structured data describes the application itself, so the landing page carries it.
+const structuredData =
+  Astro.url.pathname === '/'
+    ? {
+        '@context': 'https://schema.org',
+        '@type': 'WebApplication',
+        name: t.meta.title,
+        applicationCategory: 'SecurityApplication',
+        operatingSystem: 'Any',
+        browserRequirements: 'Requires a modern browser with JavaScript and Web Crypto',
+        description: pageDescription,
+        offers: { '@type': 'Offer', price: '0', priceCurrency: 'EUR' },
+      }
+    : null;
 ---
 
 <!doctype html>
@@ -24,11 +50,32 @@ const next = `${Astro.url.pathname}${Astro.url.search}`;
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <title>{title} · {t.meta.title}</title>
-    <meta name="description" content={description ?? t.meta.description} />
-    <meta name="robots" content={t.meta.robots} />
+    <title>{pageTitle}</title>
+    <meta name="description" content={pageDescription} />
+    <meta name="robots" content={robots} />
     <meta name="referrer" content="no-referrer" />
     <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#0a0b0d" />
+    {canonical && <link rel="canonical" href={canonical} />}
+    {canonical && <link rel="alternate" hreflang="x-default" href={canonical} />}
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content={t.meta.title} />
+    <meta property="og:title" content={pageTitle} />
+    <meta property="og:description" content={pageDescription} />
+    <meta property="og:locale" content={ogLocale} />
+    <meta property="og:locale:alternate" content={ogLocaleAlternate} />
+    {canonical && <meta property="og:url" content={canonical} />}
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content={pageTitle} />
+    <meta name="twitter:description" content={pageDescription} />
+    {
+      structuredData && (
+        <script
+          type="application/ld+json"
+          set:html={JSON.stringify(structuredData).replace(/</g, '\\u003c')}
+        />
+      )
+    }
   </head>
   <body>
     <a class="skip-link" href="#main">{t.skipToContent}</a>

@@ -16,12 +16,13 @@ try {
   if (home.headers.get('x-frame-options') !== 'DENY') failures.push('framing');
   if (!/max-age=[1-9]\d*/.test(home.headers.get('strict-transport-security') ?? '')) failures.push('hsts');
   if (!home.headers.get('content-security-policy')?.includes("frame-ancestors 'none'")) failures.push('csp');
-  if (!home.headers.get('x-robots-tag')?.includes('noindex')) failures.push('indexing');
+  if (!home.headers.get('x-robots-tag')?.includes('index, follow')) failures.push('indexing');
   await home.body?.cancel();
   const health = await fetch(new URL('/api/health', origin), {
     redirect: 'manual', signal: AbortSignal.timeout(15_000),
   });
   if (health.status !== 200 || (await health.json()).ok !== true) failures.push('readiness');
+  if (!health.headers.get('x-robots-tag')?.includes('noindex')) failures.push('api-indexing');
 } catch {
   failures.push('connection-or-response');
 }

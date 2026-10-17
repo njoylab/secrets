@@ -1,6 +1,7 @@
 import { defineMiddleware } from 'astro:middleware';
 import { errorResponse, hstsHeaderValue, RESOLVED_IP_HEADER, SENSITIVE_HEADERS } from './lib/http.ts';
-import { detectLocale, getDictionary, LOCALE_COOKIE, normalizeLocale, type Locale } from './lib/i18n.ts';
+import { detectLocale, LOCALE_COOKIE, normalizeLocale, type Locale } from './lib/i18n.ts';
+import { robotsForPath } from './lib/seo.ts';
 
 /**
  * Read the client IP resolved by `server.mjs`.
@@ -40,8 +41,8 @@ export const onRequest = defineMiddleware(async (context, next) => {
   }
   response.headers.set('content-language', locale);
 
-  // The whole service is unindexable and uncacheable: pages hold no secret, but
-  // the reveal flow must never be stored by intermediaries.
+  // Sensitive responses are never cached. Only the public pages may be indexed;
+  // the token pages, the endpoints and unknown paths are kept out of search.
   // A rendered page already carries Astro's policy with the hashes of its inline
   // scripts and styles; replacing it would block them. Everything else gets the
   // deny-all policy from SENSITIVE_HEADERS.
@@ -52,7 +53,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
   if (pagePolicy) response.headers.set('content-security-policy', pagePolicy);
   const hsts = hstsHeaderValue(context.request);
   if (hsts) response.headers.set('strict-transport-security', hsts);
-  response.headers.set('x-robots-tag', getDictionary(locale).meta.robots);
+  response.headers.set('x-robots-tag', robotsForPath(context.url.pathname));
 
   return response;
 });
