@@ -28,11 +28,8 @@ export type Dictionary = {
   themeToggle: string;
   javascriptRequired: string;
   language: { label: string; it: string; en: string };
-  nav: { home: string; menu: string; dashboard: string };
   create: {
     title: string;
-    hero: string;
-    section: string;
     secretLabel: string;
     secretPlaceholder: string;
     secretHint: string;
@@ -125,17 +122,7 @@ export type Dictionary = {
     message: string;
     home: string;
   };
-  contact: {
-    title: string;
-    lead: string;
-    email: string;
-    social: string;
-    twitter: string;
-    linkedin: string;
-    github: string;
-  };
   footer: {
-    limits: string;
     linksLabel: string;
     how: string;
     privacy: string;
@@ -158,12 +145,9 @@ const it: Dictionary = {
   themeToggle: 'Cambia tema',
   javascriptRequired: 'Richiede JavaScript e una connessione sicura.',
   language: { label: 'Lingua', it: 'Italiano', en: 'Inglese' },
-  nav: { home: 'Nuovo segreto', menu: 'Apri menu', dashboard: 'Dashboard' },
 
   create: {
     title: 'Nuovo segreto',
-    hero: 'link monouso',
-    section: 'nuovo-segreto',
     secretLabel: 'Segreto',
     secretPlaceholder: 'Testo del segreto',
     secretHint: 'Massimo 50 KiB',
@@ -262,18 +246,7 @@ const it: Dictionary = {
     home: 'Crea un nuovo segreto',
   },
 
-  contact: {
-    title: 'contatto',
-    lead: 'Domande, segnalazioni o qualcosa che non funziona.',
-    email: 'Email',
-    social: 'Social',
-    twitter: 'Twitter',
-    linkedin: 'LinkedIn',
-    github: 'GitHub',
-  },
-
   footer: {
-    limits: 'Limite 50 KiB · una sola lettura',
     linksLabel: 'Documenti',
     how: 'Come funziona',
     privacy: 'Informativa privacy',
@@ -293,12 +266,9 @@ const en: Dictionary = {
   themeToggle: 'Toggle theme',
   javascriptRequired: 'Requires JavaScript and a secure connection.',
   language: { label: 'Language', it: 'Italian', en: 'English' },
-  nav: { home: 'New secret', menu: 'Toggle navigation', dashboard: 'Dashboard' },
 
   create: {
     title: 'New secret',
-    hero: 'one-time links',
-    section: 'new-secret',
     secretLabel: 'Secret',
     secretPlaceholder: 'Secret text',
     secretHint: '50 KiB max',
@@ -397,18 +367,7 @@ const en: Dictionary = {
     home: 'Create a new secret',
   },
 
-  contact: {
-    title: 'contact',
-    lead: 'Questions, feedback, or something not working? Get in touch.',
-    email: 'Email',
-    social: 'Social',
-    twitter: 'Twitter',
-    linkedin: 'LinkedIn',
-    github: 'GitHub',
-  },
-
   footer: {
-    limits: '50 KiB limit · one read only',
     linksLabel: 'Documents',
     how: 'How it works',
     privacy: 'Privacy policy',

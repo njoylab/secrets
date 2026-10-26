@@ -134,7 +134,6 @@ describe('dictionaries', () => {
     for (const group of [
       'meta',
       'language',
-      'nav',
       'create',
       'result',
       'open',

@@ -89,31 +89,19 @@ const structuredData =
     <a href="#main" class="skip-link">{t.skipToContent}</a>
     <nav class="navbar">
       <div class="container">
-        <a href="/" class="navbar-brand">echoValue Secrets</a>
-        <button class="theme-toggle" type="button" aria-label={t.themeToggle}>
-          <svg class="fa-solid fa-moon" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M21 14.5A8.5 8.5 0 1 1 9.5 3 7 7 0 0 0 21 14.5z"></path>
-          </svg>
-          <svg class="fa-solid fa-sun" viewBox="0 0 24 24" aria-hidden="true">
-            <circle cx="12" cy="12" r="4"></circle>
-            <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path>
-          </svg>
-        </button>
-        <button class="navbar-toggle" type="button" aria-label={t.nav.menu}>
-          <span></span>
-          <span></span>
-          <span></span>
-        </button>
-        <ul class="navbar-nav">
-          <li><a href="/" aria-current={here === '/' ? 'page' : undefined}>{t.nav.home}</a></li>
-          <li><a href="/how" aria-current={here === '/how' ? 'page' : undefined}>{t.footer.how}</a></li>
-          <li><a href="/privacy" aria-current={here === '/privacy' ? 'page' : undefined}>{t.footer.privacy}</a></li>
-          <li><a href="/terms" aria-current={here === '/terms' ? 'page' : undefined}>{t.footer.terms}</a></li>
-          <li><LanguageSwitcher locale={locale} next={next} /></li>
-          <li>
-            <a href="https://dash.echovalue.dev" class="navbar-cta" target="_blank" rel="noopener noreferrer">{t.nav.dashboard}</a>
-          </li>
-        </ul>
+        <a href="/" class="navbar-brand">echoValue<span class="brand-product">secrets</span></a>
+        <div class="navbar-tools">
+          <LanguageSwitcher locale={locale} next={next} />
+          <button class="theme-toggle" type="button" aria-label={t.themeToggle}>
+            <svg class="fa-solid fa-moon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M21 14.5A8.5 8.5 0 1 1 9.5 3 7 7 0 0 0 21 14.5z"></path>
+            </svg>
+            <svg class="fa-solid fa-sun" viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="4"></circle>
+              <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path>
+            </svg>
+          </button>
+        </div>
       </div>
     </nav>
     <main id="main">
@@ -121,13 +109,9 @@ const structuredData =
     </main>
     <footer class="footer">
       <div class="container">
-        <div class="footer-content">
+        <nav aria-label={t.footer.linksLabel}>
           <ul class="footer-links">
-            <li><a href="https://www.echovalue.dev/" target="_blank" rel="noopener noreferrer">Home</a></li>
-            <li><a href="https://www.echovalue.dev/db-api/" target="_blank" rel="noopener noreferrer">DB API</a></li>
-            <li><a href="https://www.echovalue.dev/webhook-api/" target="_blank" rel="noopener noreferrer">Webhook API</a></li>
-            <li><a href="https://docs.echovalue.dev" target="_blank" rel="noopener noreferrer">Documentation</a></li>
-            <li><a href="https://dash.echovalue.dev" target="_blank" rel="noopener noreferrer">Dashboard</a></li>
+            <li><a href="/how">{t.footer.how}</a></li>
             <li><a href="/privacy">{t.footer.privacy}</a></li>
             {
               sourceUrl && (
@@ -138,31 +122,9 @@ const structuredData =
             }
             <li><a href="/terms">{t.footer.terms}</a></li>
           </ul>
-        </div>
-        <div class="footer-bottom">
-          <p>
-            Built by <a href="https://www.njoylab.com" target="_blank" rel="noopener noreferrer">nJoyLab.com</a> ·
-            IT12822520966 · <span class="text-mono">v2.0</span>
-          </p>
-        </div>
+        </nav>
       </div>
     </footer>
-    <script>
-      const toggle = document.querySelector('.navbar-toggle');
-      const nav = document.querySelector('.navbar-nav');
-      if (toggle && nav) {
-        toggle.addEventListener('click', () => {
-          toggle.classList.toggle('active');
-          nav.classList.toggle('active');
-        });
-        for (const link of nav.querySelectorAll('a')) {
-          link.addEventListener('click', () => {
-            toggle.classList.remove('active');
-            nav.classList.remove('active');
-          });
-        }
-      }
-    </script>
     <script>
       const themeButton = document.querySelector('.theme-toggle');
       if (themeButton) {
