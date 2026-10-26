@@ -12,9 +12,15 @@ Astro.response.status = 404;
 ---
 
 <Layout title={t.notFound.title}>
-  <h1 class="page-title">{t.notFound.title}</h1>
-  <Panel>
-    <p class="notice-message">{t.notFound.message}</p>
-    <a class="btn btn-primary align-start" href="/">{t.notFound.home}</a>
-  </Panel>
+  <section class="section pt-nav">
+    <div class="container">
+      <div class="tool-wrap">
+        <h1>{t.notFound.title}</h1>
+        <Panel>
+          <p class="notice-message">{t.notFound.message}</p>
+          <a class="btn btn-primary align-start" href="/">{t.notFound.home}</a>
+        </Panel>
+      </div>
+    </div>
+  </section>
 </Layout>

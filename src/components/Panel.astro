@@ -12,11 +12,17 @@ const { id, heading, headingId, hidden = false, class: className } = Astro.props
 
 <section
   id={id}
-  class:list={['panel', className]}
+  class:list={['project-card', 'tool-card', className]}
   tabindex="-1"
   aria-labelledby={heading && headingId ? headingId : undefined}
   hidden={hidden ? true : undefined}
 >
-  {heading && <h2 class="panel-title" id={headingId}>{heading}</h2>}
-  <slot />
+  {heading && (
+    <div class="project-card-header">
+      <h2 class="panel-title" id={headingId}>{heading}</h2>
+    </div>
+  )}
+  <div class="project-card-content">
+    <slot />
+  </div>
 </section>

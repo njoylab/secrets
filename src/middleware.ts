@@ -45,12 +45,20 @@ export const onRequest = defineMiddleware(async (context, next) => {
   // the token pages, the endpoints and unknown paths are kept out of search.
   // A rendered page already carries Astro's policy with the hashes of its inline
   // scripts and styles; replacing it would block them. Everything else gets the
-  // deny-all policy from SENSITIVE_HEADERS.
+  // deny-all policy from SENSITIVE_HEADERS. `astro dev` does not emit that
+  // hashed policy, so an HTML response there keeps a local policy that allows
+  // the stylesheet Vite inlines. Production always has `pagePolicy`.
   const pagePolicy = response.headers.get('content-security-policy');
   for (const [header, value] of Object.entries(SENSITIVE_HEADERS)) {
     response.headers.set(header, value);
   }
   if (pagePolicy) response.headers.set('content-security-policy', pagePolicy);
+  else if (import.meta.env.DEV && (response.headers.get('content-type') ?? '').includes('text/html')) {
+    response.headers.set(
+      'content-security-policy',
+      "default-src 'self'; img-src 'self'; connect-src 'self' ws:; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'",
+    );
+  }
   const hsts = hstsHeaderValue(context.request);
   if (hsts) response.headers.set('strict-transport-security', hsts);
   response.headers.set('x-robots-tag', robotsForPath(context.url.pathname));

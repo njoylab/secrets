@@ -29,10 +29,10 @@ Personal or machine-specific preferences belong in an ignored local file
 
 ## UI
 
-- Keep the interface minimal, dark, and oriented toward developers.
-- Use system fonts, monospace for secrets and links, subtle borders, and one accent color.
-- Prefer Astro components, plain CSS, and minimal browser JavaScript.
-- Avoid marketing sections, verbose explanations, decorative animations, and third-party assets.
+- The chrome follows the echoValue shell: skip link, navbar, theme toggle, hamburger, footer, and `src/styles/dev-theme.css`, imported by the layout so Astro can hash it into the page CSP. Dark is the default.
+- Keep page copy in the Italian and English dictionaries. Secret content is never translated.
+- Prefer Astro components and the classes already in the theme. Do not add a second palette, a remote font, or a remote icon stylesheet: the Content-Security-Policy is `default-src 'self'`.
+- The create, reveal, and control flows stay a form inside the shell. Do not turn them into a marketing landing.
 - Preserve responsive layout, keyboard navigation, accessible labels, and visible focus states.
 
 ## Security and data invariants

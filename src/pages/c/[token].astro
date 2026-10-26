@@ -34,7 +34,10 @@ const closedAt = status?.closedAt ? formatInstant(status.closedAt, locale) : '';
 ---
 
 <Layout title={t.control.title}>
-  <h1 class="page-title">{t.control.title}</h1>
+  <section class="section pt-nav">
+    <div class="container">
+      <div class="tool-wrap">
+  <h1><span class="mono">secrets</span> {t.control.title}</h1>
 
   {
     status === null ? (
@@ -128,6 +131,9 @@ const closedAt = status?.closedAt ? formatInstant(status.closedAt, locale) : '';
       </Panel>
     )
   }
+      </div>
+    </div>
+  </section>
 </Layout>
 
 <script>

@@ -10,9 +10,55 @@ const t = getDictionary(Astro.locals.locale);
 ---
 
 <Layout title={t.create.title}>
-  <h1 class="page-title">{t.create.title}</h1>
-  <CreateForm />
-  <ResultPanel />
+  <section class="hero compact">
+    <div class="container">
+      <h1><span class="mono">secrets</span> {t.create.hero}</h1>
+      <p>
+        {t.meta.description}<br />
+        {t.footer.limits}
+      </p>
+    </div>
+  </section>
+  <section id="create" class="section no-border">
+    <div class="container">
+      <div class="tool-wrap">
+        <div class="section-header">
+          <h2>{t.create.section}</h2>
+          <p>{t.create.noteSingleRead}</p>
+        </div>
+        <CreateForm />
+        <ResultPanel />
+      </div>
+    </div>
+  </section>
+  <section id="contact" class="section bg-light">
+    <div class="container">
+      <div class="section-header">
+        <h2>{t.contact.title}</h2>
+        <p>{t.contact.lead}</p>
+      </div>
+      <div class="contact-info">
+        <div class="contact-item">
+          <h3>{t.contact.email}</h3>
+          support at echovalue dot dev
+        </div>
+        <div class="contact-item">
+          <h3>{t.contact.social}</h3>
+          <div class="social-links">
+            <a href="https://twitter.com/emln_" aria-label={t.contact.twitter} target="_blank" rel="noopener noreferrer">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 5.8c-.7.3-1.5.6-2.2.7a3.9 3.9 0 0 0 1.7-2.2 7.8 7.8 0 0 1-2.5 1 3.9 3.9 0 0 0-6.7 3.6A11.1 11.1 0 0 1 3.1 4.9a3.9 3.9 0 0 0 1.2 5.2 3.8 3.8 0 0 1-1.8-.5v.1a3.9 3.9 0 0 0 3.1 3.8 3.9 3.9 0 0 1-1.8.1 3.9 3.9 0 0 0 3.6 2.7A7.8 7.8 0 0 1 2 18.4a11 11 0 0 0 6 1.8c7.2 0 11.1-6 11.1-11.1v-.5A7.8 7.8 0 0 0 22 5.8z"></path></svg>
+            </a>
+            <a href="https://www.linkedin.com/in/emlns/" aria-label={t.contact.linkedin} target="_blank" rel="noopener noreferrer">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.7 3.3A2.2 2.2 0 1 1 4.7 7.7 2.2 2.2 0 0 1 4.7 3.3zM3 9h3.4v12H3zM9.3 9h3.3v1.6h.1c.5-.9 1.6-1.8 3.3-1.8 3.5 0 4.2 2.3 4.2 5.3V21H16.8v-5.3c0-1.3 0-2.9-1.8-2.9s-2 1.4-2 2.8V21H9.3z"></path></svg>
+            </a>
+            <a href="https://github.com/njoylab" aria-label={t.contact.github} target="_blank" rel="noopener noreferrer">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 0 0-3.2 19.5c.5.1.7-.2.7-.5v-1.7c-2.8.6-3.4-1.2-3.4-1.2-.4-1.1-1.1-1.4-1.1-1.4-.9-.6.1-.6.1-.6 1 .1 1.5 1 1.5 1 .9 1.5 2.4 1.1 3 .8.1-.6.4-1.1.6-1.3-2.2-.3-4.6-1.1-4.6-5a3.9 3.9 0 0 1 1-2.7 3.6 3.6 0 0 1 .1-2.6s.8-.3 2.8 1a9.6 9.6 0 0 1 5 0c2-1.3 2.8-1 2.8-1a3.6 3.6 0 0 1 .1 2.6 3.9 3.9 0 0 1 1 2.7c0 3.9-2.3 4.7-4.6 5 .4.3.7.9.7 1.9v2.8c0 .3.2.6.7.5A10 10 0 0 0 12 2z"></path></svg>
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
 </Layout>
 
 <script>

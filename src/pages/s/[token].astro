@@ -18,7 +18,10 @@ const presence = await peekSecretPresence(token);
 ---
 
 <Layout title={t.open.title}>
-  <h1 class="page-title">{t.open.title}</h1>
+  <section class="section pt-nav">
+    <div class="container">
+      <div class="tool-wrap">
+  <h1><span class="mono">secrets</span> {t.open.title}</h1>
 
   {
     presence === null ? (
@@ -101,6 +104,9 @@ const presence = await peekSecretPresence(token);
       </>
     )
   }
+      </div>
+    </div>
+  </section>
 </Layout>
 
 <script>

@@ -26,11 +26,17 @@ const {
 
 <section
   id={id}
-  class:list={['panel', className]}
+  class:list={['project-card', 'tool-card', className]}
   tabindex="-1"
   aria-labelledby={headingId}
   hidden={hidden ? true : undefined}
 >
-  <h2 class="panel-title" id={headingId}>{heading}</h2>
-  {hint && <p class="note" id={hintId} role={live ? 'status' : undefined} aria-live={live ? 'polite' : undefined}>{hint}</p>}
+  <div class="project-card-header">
+    <h2 class="panel-title" id={headingId}>{heading}</h2>
+  </div>
+  {hint && (
+    <div class="project-card-content">
+      <p class="note" id={hintId} role={live ? 'status' : undefined} aria-live={live ? 'polite' : undefined}>{hint}</p>
+    </div>
+  )}
 </section>

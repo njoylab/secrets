@@ -24,29 +24,32 @@ const parts = (text: string) => resolveLegalText(text, locale);
 ---
 
 <Layout title={document.title} description={document.summary}>
-  <article class="legal">
-    <header class="legal-head">
-      <h1 class="page-title">{document.title}</h1>
-      <p class="legal-updated">
-        <span class="meta-label">{t.legal.updated}</span>
-        <time datetime={document.updated}>{updated}</time>
-      </p>
-      <p class="legal-summary">{document.summary}</p>
-    </header>
-
-    {document.sections.map((section) => (
-      <section class="legal-section">
-        <h2>{section.heading}</h2>
-        {section.blocks.map((block) =>
-          block.kind === 'list' ? (
-            <ul>
-              {block.items.map((item) => <li>{parts(item).map((part) => (typeof part === 'string' ? <Fragment>{part}</Fragment> : <a href={part.href}>{part.label}</a>))}</li>)}
-            </ul>
-          ) : (
-            <p>{parts(block.text).map((part) => (typeof part === 'string' ? <Fragment>{part}</Fragment> : <a href={part.href}>{part.label}</a>))}</p>
-          ),
-        )}
-      </section>
-    ))}
-  </article>
+  <section class="section pt-nav">
+    <div class="container">
+      <div class="legal-content">
+        <h1>{document.title}</h1>
+        <p class="legal-date">
+          {t.legal.updated}{': '}
+          <time datetime={document.updated}>{updated}</time>
+        </p>
+        <div class="legal-body">
+          <p>{document.summary}</p>
+          {document.sections.map((section) => (
+            <Fragment>
+              <h2>{section.heading}</h2>
+              {section.blocks.map((block) =>
+                block.kind === 'list' ? (
+                  <ul>
+                    {block.items.map((item) => <li>{parts(item).map((part) => (typeof part === 'string' ? <Fragment>{part}</Fragment> : <a href={part.href}>{part.label}</a>))}</li>)}
+                  </ul>
+                ) : (
+                  <p>{parts(block.text).map((part) => (typeof part === 'string' ? <Fragment>{part}</Fragment> : <a href={part.href}>{part.label}</a>))}</p>
+                ),
+              )}
+            </Fragment>
+          ))}
+        </div>
+      </div>
+    </div>
+  </section>
 </Layout>
