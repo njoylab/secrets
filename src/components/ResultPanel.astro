@@ -19,12 +19,12 @@ const t = getDictionary(locale);
         spellcheck="false"
         autocomplete="off"
         translate="no"
-        aria-describedby="result-note"
       />
       <button
         type="button"
         class="btn btn-ghost btn-copy"
         id="result-copy"
+        aria-label={t.result.copyLink}
         data-label-idle={t.result.copy}
         data-label-done={t.result.copied}
         data-label-failed={t.result.copyFailed}
@@ -57,6 +57,7 @@ const t = getDictionary(locale);
         type="button"
         class="btn btn-ghost btn-copy"
         id="result-control-copy"
+        aria-label={t.result.copyControlLink}
         data-label-idle={t.result.copy}
         data-label-done={t.result.copied}
         data-label-failed={t.result.copyFailed}
@@ -103,6 +104,7 @@ const t = getDictionary(locale);
         type="button"
         class="btn btn-ghost btn-copy"
         id="result-password-copy"
+        aria-label={t.result.copyPassword}
         data-label-idle={t.result.copy}
         data-label-done={t.result.copied}
         data-label-failed={t.result.copyFailed}
@@ -112,7 +114,7 @@ const t = getDictionary(locale);
         <span class="btn-label">{t.result.copy}</span>
       </button>
     </div>
-    <p class="note" id="note-password-echo">{t.create.notePassword}</p>
+    <p class="note" id="note-password-echo">{t.result.notePassword}</p>
   </div>
 
   <p class="meta" id="result-expiry">
@@ -144,8 +146,6 @@ const t = getDictionary(locale);
     </canvas>
     <p class="note" id="result-qr-hint">{t.result.qrHint}</p>
   </div>
-
-  <p class="note" id="result-note">{t.result.noteKeyInFragment}</p>
 
   <p class="status" id="result-status" role="status" aria-live="polite"></p>
 

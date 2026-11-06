@@ -449,12 +449,12 @@ describe('sensitive response headers', () => {
     expect(await italian.json()).toEqual({
       ok: false,
       error: 'badPassword',
-      message: 'Password errata',
+      message: 'Controlla la password e assicurati di usare il link originale.',
     });
     expect(await english.json()).toEqual({
       ok: false,
       error: 'badPassword',
-      message: 'Incorrect password',
+      message: 'Check the password and make sure you are using the original link.',
     });
   });
 

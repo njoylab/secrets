@@ -99,7 +99,7 @@ describe('POST /api/secrets', () => {
     const reply = await reveal({ token, authKey: TEST_AUTH_KEY });
     expect(reply.status).toBe(403);
     expect(reply.body.error).toBe('badKey');
-    expect(reply.body.message).toBe('Key does not match. The secret was not consumed.');
+    expect(reply.body.message).toBe('Reopen the original link or ask the sender to resend it.');
     expect(await countSecrets()).toBe(1);
     expect((await reveal({ token, authKey: sealed.authKey })).body.payload).toBe(sealed.payload);
   });

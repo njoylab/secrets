@@ -39,10 +39,10 @@ const presence = await peekSecretPresence(token);
             data-token={token}
             data-password-mode={presence.password}
             data-error-server={t.errors.serverError}
-            data-error-bad-password={t.errors.badPassword}
-            data-error-missing-key={t.open.missingKey}
+            data-error-password-required={t.open.passwordRequired}
+            data-error-password-too-long={t.errors.passwordTooLong}
             data-error-bad-key={t.errors.badKey}
-            data-error-key-failed={t.open.keyFailed}
+            data-error-decryption-failed={t.open.decryptionFailed}
           >
             {presence.password !== 'none' && (
               <PasswordField
@@ -60,6 +60,7 @@ const presence = await peekSecretPresence(token);
               type="submit"
               class="btn btn-primary btn-block"
               id="open-submit"
+              aria-describedby="open-single-read"
               disabled
               data-label-idle={t.open.reveal}
               data-label-busy={t.open.revealing}
@@ -67,7 +68,7 @@ const presence = await peekSecretPresence(token);
               <Icon name="key" />
               <span class="btn-label">{t.open.reveal}</span>
             </button>
-            <p class="note">{t.open.noteSingleRead}</p>
+            <p class="note" id="open-single-read">{t.noteSingleRead}</p>
           </form>
         </Panel>
 
@@ -86,9 +87,6 @@ const presence = await peekSecretPresence(token);
             <span class="btn-label">{t.secret.copy}</span>
           </button>
           <p class="status" id="secret-status" role="status" aria-live="polite"></p>
-          {/* Read and spent, not an error: the copy of the dead end would read as a
-              failure right under a secret the reader is looking at. */}
-          <p class="panel-title">{t.secret.spentTitle}</p>
           <p class="note">{t.secret.spentHint}</p>
         </Panel>
 
@@ -116,7 +114,8 @@ const presence = await peekSecretPresence(token);
     deriveSecretKeys,
     encodeAuthKey,
     encodeShareFragment,
-    type SecretKeys,
+    normalizedPasswordLength,
+    PASSWORD_MAX_LENGTH,
   } from '../../lib/content-crypto.ts';
 
   interface RevealApiResponse {
@@ -219,10 +218,10 @@ const presence = await peekSecretPresence(token);
     const token = form.dataset.token ?? '';
     const passwordMode = form.dataset.passwordMode ?? 'none';
     const serverError = form.dataset.errorServer ?? '';
-    const badPassword = form.dataset.errorBadPassword ?? '';
-    const missingKey = form.dataset.errorMissingKey ?? '';
+    const passwordRequired = form.dataset.errorPasswordRequired ?? '';
+    const passwordTooLong = form.dataset.errorPasswordTooLong ?? '';
     const badKey = form.dataset.errorBadKey ?? '';
-    const keyFailed = form.dataset.errorKeyFailed ?? '';
+    const decryptionFailed = form.dataset.errorDecryptionFailed ?? '';
     const fragmentKey = openedFragment?.key ?? null;
     const salt = openedFragment?.salt ?? null;
     const revealIdle = submit.dataset.labelIdle ?? submit.textContent ?? '';
@@ -256,9 +255,8 @@ const presence = await peekSecretPresence(token);
     };
 
     /**
-     * The single dead end. `message` replaces the hint only when the reason is
-     * worth naming: a tampered key is a different failure from a spent link, even
-     * though both end with the payload already gone.
+     * The server can refuse an unavailable link or return a payload the browser
+     * cannot decrypt after the one-time read. Both require a new link.
      */
     const showConsumed = (message?: string): void => {
       form.hidden = true;
@@ -266,8 +264,7 @@ const presence = await peekSecretPresence(token);
       if (message && consumedHint) consumedHint.textContent = message;
       if (!consumed) return;
       consumed.hidden = false;
-      // The panel carries a live region of its own, so the reason is announced
-      // from the visible copy rather than from the form that just went away.
+      consumed.focus();
     };
 
     form.addEventListener('submit', async (event) => {
@@ -276,16 +273,21 @@ const presence = await peekSecretPresence(token);
 
       // Without a usable key nothing readable can come back. The server would
       // refuse the auth key anyway; this answers without a request.
-      if (!fragmentKey) {
-        fail(missingKey);
-        return;
-      }
-      if (passwordMode === 'client' && !salt) {
-        fail(missingKey);
-        return;
-      }
-      if (passwordMode !== 'client' && salt) {
+      const passwordProtected = passwordMode === 'client';
+      if (!fragmentKey || passwordProtected !== Boolean(salt)) {
         fail(badKey);
+        return;
+      }
+      const supplied = passwordProtected ? password?.value ?? '' : null;
+      if (supplied === '') {
+        fail(passwordRequired);
+        password?.focus();
+        return;
+      }
+      if (supplied !== null && normalizedPasswordLength(supplied) > PASSWORD_MAX_LENGTH) {
+        fail(passwordTooLong);
+        password?.focus();
+        password?.select();
         return;
       }
 
@@ -295,30 +297,8 @@ const presence = await peekSecretPresence(token);
       submit.disabled = true;
       setButtonLabel(submit, revealBusy);
 
-      let keys: SecretKeys;
-
       try {
-        if (passwordMode === 'client') {
-          const supplied = password?.value ?? '';
-          if (supplied.length === 0 || !salt) {
-            fail(badPassword);
-            if (password) password.focus();
-            return;
-          }
-          try {
-            keys = await deriveSecretKeys(fragmentKey, supplied, salt);
-          } catch {
-            // Only an out of range password can fail here, and it cannot match.
-            fail(badPassword);
-            if (password) {
-              password.focus();
-              password.select();
-            }
-            return;
-          }
-        } else {
-          keys = await deriveSecretKeys(fragmentKey, null, null);
-        }
+        const keys = await deriveSecretKeys(fragmentKey, supplied, salt);
 
         // The auth key proves the fragment key, and the password when set, to
         // the server before it deletes anything. The content key stays here.
@@ -341,7 +321,7 @@ const presence = await peekSecretPresence(token);
           try {
             plaintext = await decryptPayload(payload.payload, keys.contentKey);
           } catch {
-            showConsumed(keyFailed);
+            showConsumed(decryptionFailed);
             return;
           }
           // textContent keeps the secret inert: markup is never interpreted.

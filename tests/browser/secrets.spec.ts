@@ -113,6 +113,10 @@ test('encrypts before transmission, preserves inert text, and never consumes thr
 test('rejects password and direct API bypasses without consumption and clears password after creation reset', async ({ page, request }) => {
   const password = 'synthetic-browser-password';
   const { share, control, token } = await create(page, 'protected synthetic content', password);
+  await expect(page.getByRole('button', { name: 'Copy one-time link' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Copy control link' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Copy password' })).toBeVisible();
+  await expect(page.getByText('Send the password through a different channel.')).toBeVisible();
   for (const authKey of [undefined, 'x'.repeat(43)]) {
     const response = await request.post('/api/secrets/reveal', {
       data: { token, authKey },
@@ -126,9 +130,12 @@ test('rejects password and direct API bypasses without consumption and clears pa
   const outgoing: string[] = [];
   page.on('request', (req) => { if (req.method() === 'POST') outgoing.push(req.postData() ?? ''); });
   await page.goto(share);
+  await page.locator('#open-submit').click();
+  await expect(page.locator('#open-status')).toHaveText('Enter the password.');
+  expect(outgoing).toHaveLength(0);
   await page.locator('#open-password').fill('wrong');
   await page.locator('#open-submit').click();
-  await expect(page.locator('#open-status')).toHaveText('Incorrect password');
+  await expect(page.locator('#open-status')).toHaveText('Check the password and make sure you are using the original link.');
   const check = await page.context().newPage();
   await check.goto(control);
   await expect(check.locator('#control-state-pending')).toBeVisible();
@@ -142,6 +149,7 @@ test('rejects password and direct API bypasses without consumption and clears pa
 test('accepts a 50 KiB secret and copies the generated link', async ({ page }) => {
   const text = 'a'.repeat(50 * 1024);
   const { share } = await create(page, text);
+  await expect(page.getByText('Send the password through a different channel.')).toBeHidden();
   await page.locator('#result-copy').click();
   await expect(page.locator('#result-copy')).toHaveAttribute('data-copied', 'true');
   await page.goto(share);
@@ -174,7 +182,7 @@ test('a tampered fragment key is refused without consuming, and the original lin
   url.hash = (key[0] === 'A' ? 'B' : 'A') + key.slice(1);
   await page.goto(url.toString());
   await page.locator('#open-submit').click();
-  await expect(page.locator('#open-status')).toHaveText('Key does not match. The secret was not consumed.');
+  await expect(page.locator('#open-status')).toHaveText('Reopen the original link or ask the sender to resend it.');
   await expect(page.locator('#open-form')).toBeVisible();
   const check = await page.context().newPage();
   await check.goto(control);
@@ -186,7 +194,7 @@ test('a tampered fragment key is refused without consuming, and the original lin
   await expect(page.locator('#secret-text')).toHaveText('synthetic tamper content');
 });
 
-test('a reload loses the key but says the secret was not consumed', async ({ page }) => {
+test('a reload asks for the original link and leaves the secret available', async ({ page }) => {
   const { share, control } = await create(page, 'synthetic reload content');
   let reveals = 0;
   page.on('request', (req) => { if (req.url().endsWith('/api/secrets/reveal')) reveals++; });
@@ -195,14 +203,14 @@ test('a reload loses the key but says the secret was not consumed', async ({ pag
   await page.reload();
   await page.locator('#open-submit').click();
   await expect(page.locator('#open-status')).toHaveText(
-    'Key missing from the address. The secret was not consumed: open the original link again.',
+    'Reopen the original link or ask the sender to resend it.',
   );
   expect(reveals).toBe(0);
-  await page.getByRole('link', { name: 'Italian', exact: true }).click();
+  await page.getByRole('link', { name: 'Italiano', exact: true }).click();
   await expect(page.locator('html')).toHaveAttribute('lang', 'it');
   await page.locator('#open-submit').click();
   await expect(page.locator('#open-status')).toHaveText(
-    'Chiave assente dall’indirizzo. Il segreto non è stato consumato: riapri il link originale.',
+    'Riapri il link originale o chiedi al mittente di rimandartelo.',
   );
   await page.goto(control);
   await expect(page.locator('#control-state-pending')).toBeVisible();
@@ -255,12 +263,12 @@ test('input limits, labels, keyboard access, languages and responsive layout', a
   await page.keyboard.press('Tab');
   await expect(page.locator('#expiry')).toBeFocused();
   expect(await page.locator('#expiry').evaluate((el) => getComputedStyle(el).outlineStyle)).not.toBe('none');
-  await page.getByRole('link', { name: 'Italian', exact: true }).click();
+  await page.getByRole('link', { name: 'Italiano', exact: true }).click();
   await expect(page.locator('html')).toHaveAttribute('lang', 'it');
   await expect(page.locator('#secret')).toHaveAccessibleName('Segreto');
   await page.reload();
   await expect(page.locator('html')).toHaveAttribute('lang', 'it');
-  await page.getByRole('link', { name: 'Inglese', exact: true }).click();
+  await page.getByRole('link', { name: 'English', exact: true }).click();
   await expect(page.locator('html')).toHaveAttribute('lang', 'en');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
@@ -273,7 +281,7 @@ test('the footer links to the public repository in both languages', async ({ pag
   await expect(source).toHaveAttribute('rel', /noopener/);
   await expect(source).toHaveAttribute('href', /^https:\/\//);
 
-  await page.getByRole('link', { name: 'Italian', exact: true }).click();
+  await page.getByRole('link', { name: 'Italiano', exact: true }).click();
   await expect(page.locator('html')).toHaveAttribute('lang', 'it');
   await expect(page.getByRole('link', { name: 'Codice sorgente', exact: true })).toBeVisible();
 });
@@ -390,7 +398,7 @@ test('control link reports creation, expiry and closing instants', async ({ page
 
 test('the QR code and the control instants are localised in Italian', async ({ page }) => {
   await page.goto('/');
-  await page.getByRole('link', { name: 'Italian', exact: true }).click();
+  await page.getByRole('link', { name: 'Italiano', exact: true }).click();
   await expect(page.locator('html')).toHaveAttribute('lang', 'it');
 
   await page.locator('#secret').fill('prova');
@@ -398,7 +406,7 @@ test('the QR code and the control instants are localised in Italian', async ({ p
   await expect(page.locator('#result-panel')).toBeVisible();
 
   await expect(page.locator('#result-qr-label')).toHaveText('Codice QR');
-  await expect(page.locator('#result-qr-hint')).toHaveText('Scansiona per aprire il link. Contiene la chiave.');
+  await expect(page.locator('#result-qr-hint')).toHaveText('Scansiona per aprire il link.');
   // The accessible name follows the visible label in this language too.
   await expect(page.locator('#result-qr')).toHaveAccessibleName('Codice QR');
 
@@ -439,7 +447,7 @@ test('an unknown path renders the styled 404 page in both languages without CSP 
   expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).not.toBe('rgba(0, 0, 0, 0)');
   await expect(page.getByRole('link', { name: 'Create a new secret' })).toHaveAttribute('href', '/');
 
-  await page.getByRole('link', { name: 'Italian', exact: true }).click();
+  await page.getByRole('link', { name: 'Italiano', exact: true }).click();
   await expect(page).toHaveURL(/\/no-such-page$/);
   await expect(page.locator('html')).toHaveAttribute('lang', 'it');
   await expect(page.getByRole('heading', { level: 1, name: 'Pagina non trovata' })).toBeVisible();

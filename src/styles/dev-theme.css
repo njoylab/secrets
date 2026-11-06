@@ -1489,19 +1489,10 @@ input.input-mono {
   color: var(--color-error);
 }
 
-.note,
-.notes {
+.note {
   margin: 0;
   font-size: 0.8125rem;
   color: var(--color-text-secondary);
-}
-
-.notes {
-  padding: 0;
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
 }
 
 .icon { flex: none; color: var(--color-text-secondary); }

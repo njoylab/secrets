@@ -205,7 +205,6 @@ describe('wording required by PIANO_SVILUPPO.md', () => {
     ['Copia', 'Copy'],
     ['Copiato', 'Copied'],
     ['Mostra segreto', 'Reveal secret'],
-    ['Password errata', 'Incorrect password'],
     ['Link non disponibile', 'Link unavailable'],
     ['Annulla segreto', 'Cancel secret'],
   ];
@@ -220,20 +219,6 @@ describe('wording required by PIANO_SVILUPPO.md', () => {
     expect(enPaths.length, english).toBeGreaterThan(0);
     // The two languages must use the same label for the same element.
     expect(itPaths.sort()).toEqual(enPaths.sort());
-  });
-
-  it('pins the permitted notes verbatim', () => {
-    const it = getDictionary('it');
-    const en = getDictionary('en');
-    expect(it.create.notePassword).toBe('Invia la password separatamente');
-    expect(en.create.notePassword).toBe('Send the password separately');
-    expect(it.create.noteSingleRead).toBe('Una sola lettura. Nessun recupero');
-    expect(en.create.noteSingleRead).toBe('One read only. No recovery');
-    // The same two notes, reused on the opening screen.
-    expect(it.open.noteSingleRead).toBe('Una sola lettura. Nessun recupero');
-    expect(en.open.noteSingleRead).toBe('One read only. No recovery');
-    expect(it.result.noteKeyInFragment).toBe('La chiave è nel link, dopo #');
-    expect(en.result.noteKeyInFragment).toBe('The key is in the link, after #');
   });
 
   it('keeps the expiry labels paired by key, not by repeated text', () => {

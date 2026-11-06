@@ -27,11 +27,11 @@ export type Dictionary = {
   skipToContent: string;
   themeToggle: string;
   javascriptRequired: string;
+  noteSingleRead: string;
   language: { label: string; it: string; en: string };
   create: {
     title: string;
     secretLabel: string;
-    secretPlaceholder: string;
     secretHint: string;
     expiryLabel: string;
     expiryOptions: Record<ExpiryPreset, string>;
@@ -40,8 +40,6 @@ export type Dictionary = {
     passwordHide: string;
     submit: string;
     submitting: string;
-    notePassword: string;
-    noteSingleRead: string;
   };
   result: {
     title: string;
@@ -49,6 +47,9 @@ export type Dictionary = {
     controlLabel: string;
     controlHint: string;
     copy: string;
+    copyLink: string;
+    copyControlLink: string;
+    copyPassword: string;
     copied: string;
     copyFailed: string;
     expires: string;
@@ -58,20 +59,18 @@ export type Dictionary = {
     passwordLabel: string;
     passwordShow: string;
     passwordHide: string;
-    noteKeyInFragment: string;
+    notePassword: string;
   };
   open: {
     title: string;
     passwordLabel: string;
-    passwordOptional: string;
+    passwordRequired: string;
     passwordShow: string;
     passwordHide: string;
     reveal: string;
     revealing: string;
     unavailable: string;
-    missingKey: string;
-    keyFailed: string;
-    noteSingleRead: string;
+    decryptionFailed: string;
   };
   control: {
     title: string;
@@ -95,7 +94,6 @@ export type Dictionary = {
     copyFailed: string;
     consumed: string;
     consumedHint: string;
-    spentTitle: string;
     spentHint: string;
   };
   errors: {
@@ -119,7 +117,6 @@ export type Dictionary = {
   };
   notFound: {
     title: string;
-    message: string;
     home: string;
   };
   footer: {
@@ -144,12 +141,12 @@ const it: Dictionary = {
   skipToContent: 'Vai al contenuto',
   themeToggle: 'Cambia tema',
   javascriptRequired: 'Richiede JavaScript e una connessione sicura.',
-  language: { label: 'Lingua', it: 'Italiano', en: 'Inglese' },
+  noteSingleRead: 'Il segreto si può leggere una sola volta.',
+  language: { label: 'Lingua', it: 'Italiano', en: 'English' },
 
   create: {
     title: 'Nuovo segreto',
     secretLabel: 'Segreto',
-    secretPlaceholder: 'Testo del segreto',
     secretHint: 'Massimo 50 KiB',
     expiryLabel: 'Scadenza',
     expiryOptions: { '1h': '1 ora', '1d': '1 giorno', '7d': '7 giorni', '30d': '30 giorni' },
@@ -158,47 +155,46 @@ const it: Dictionary = {
     passwordHide: 'Nascondi password',
     submit: 'Crea link',
     submitting: 'Creazione…',
-    notePassword: 'Invia la password separatamente',
-    noteSingleRead: 'Una sola lettura. Nessun recupero',
   },
 
   result: {
     title: 'Link pronto',
     linkLabel: 'Link monouso',
     controlLabel: 'Link di controllo',
-    controlHint: 'Annulla il segreto. Non inviarlo a chi legge il segreto.',
+    controlHint: 'Tienilo per verificare lo stato o annullare il segreto.',
     copy: 'Copia',
+    copyLink: 'Copia link monouso',
+    copyControlLink: 'Copia link di controllo',
+    copyPassword: 'Copia password',
     copied: 'Copiato',
     copyFailed: 'Copia non riuscita',
     expires: 'Scadenza',
     qrLabel: 'Codice QR',
-    qrHint: 'Scansiona per aprire il link. Contiene la chiave.',
+    qrHint: 'Scansiona per aprire il link.',
     another: 'Nuovo segreto',
     passwordLabel: 'Password',
     passwordShow: 'Mostra password',
     passwordHide: 'Nascondi password',
-    noteKeyInFragment: 'La chiave è nel link, dopo #',
+    notePassword: 'Invia la password su un altro canale.',
   },
 
   open: {
     title: 'Segreto',
     passwordLabel: 'Password',
-    passwordOptional: 'Password · opzionale',
+    passwordRequired: 'Inserisci la password.',
     passwordShow: 'Mostra password',
     passwordHide: 'Nascondi password',
     reveal: 'Mostra segreto',
     revealing: 'Lettura…',
     unavailable: 'Link non disponibile',
-    missingKey: 'Chiave assente dall’indirizzo. Il segreto non è stato consumato: riapri il link originale.',
-    keyFailed: 'Chiave non valida',
-    noteSingleRead: 'Una sola lettura. Nessun recupero',
+    decryptionFailed: 'Impossibile mostrare il testo. Chiedi un nuovo link al mittente.',
   },
 
   control: {
     title: 'Controllo',
     stateLabel: 'Stato',
-    pending: 'In attesa',
-    read: 'Letto',
+    pending: 'Non ancora letto',
+    read: 'Link usato',
     expired: 'Scaduto',
     cancelled: 'Annullato',
     unavailable: 'Link non disponibile',
@@ -216,9 +212,8 @@ const it: Dictionary = {
     copied: 'Copiato',
     copyFailed: 'Copia non riuscita',
     consumed: 'Segreto non disponibile',
-    consumedHint: 'Questo link è stato già letto o è scaduto.',
-    spentTitle: 'Link esaurito',
-    spentHint: 'Il segreto è stato letto e il link non si riapre più.',
+    consumedHint: 'Chiedi un nuovo link al mittente.',
+    spentHint: 'Copia il testo prima di chiudere la pagina.',
   },
 
   errors: {
@@ -229,8 +224,8 @@ const it: Dictionary = {
     invalidExpiry: 'Scadenza non valida',
     passwordTooLong: 'Password troppo lunga',
     passwordRejected: 'Non inviare la password',
-    badPassword: 'Password errata',
-    badKey: 'Chiave non corrispondente. Il segreto non è stato consumato.',
+    badPassword: 'Controlla la password e assicurati di usare il link originale.',
+    badKey: 'Riapri il link originale o chiedi al mittente di rimandartelo.',
     unavailable: 'Link non disponibile',
     rateLimited: 'Troppe richieste. Riprova più tardi.',
     crossOrigin: 'Richiesta non consentita',
@@ -242,7 +237,6 @@ const it: Dictionary = {
 
   notFound: {
     title: 'Pagina non trovata',
-    message: 'Questo indirizzo non esiste.',
     home: 'Crea un nuovo segreto',
   },
 
@@ -265,12 +259,12 @@ const en: Dictionary = {
   skipToContent: 'Skip to content',
   themeToggle: 'Toggle theme',
   javascriptRequired: 'Requires JavaScript and a secure connection.',
-  language: { label: 'Language', it: 'Italian', en: 'English' },
+  noteSingleRead: 'You can read the secret only once.',
+  language: { label: 'Language', it: 'Italiano', en: 'English' },
 
   create: {
     title: 'New secret',
     secretLabel: 'Secret',
-    secretPlaceholder: 'Secret text',
     secretHint: '50 KiB max',
     expiryLabel: 'Expires in',
     expiryOptions: { '1h': '1 hour', '1d': '1 day', '7d': '7 days', '30d': '30 days' },
@@ -279,47 +273,46 @@ const en: Dictionary = {
     passwordHide: 'Hide password',
     submit: 'Create link',
     submitting: 'Creating…',
-    notePassword: 'Send the password separately',
-    noteSingleRead: 'One read only. No recovery',
   },
 
   result: {
     title: 'Link ready',
     linkLabel: 'One-time link',
     controlLabel: 'Control link',
-    controlHint: 'Cancels the secret. Do not send it to whoever reads the secret.',
+    controlHint: 'Keep it to check the status or cancel the secret.',
     copy: 'Copy',
+    copyLink: 'Copy one-time link',
+    copyControlLink: 'Copy control link',
+    copyPassword: 'Copy password',
     copied: 'Copied',
     copyFailed: 'Copy failed',
     expires: 'Expires',
     qrLabel: 'QR code',
-    qrHint: 'Scan to open the link. It carries the key.',
+    qrHint: 'Scan to open the link.',
     another: 'New secret',
     passwordLabel: 'Password',
     passwordShow: 'Show password',
     passwordHide: 'Hide password',
-    noteKeyInFragment: 'The key is in the link, after #',
+    notePassword: 'Send the password through a different channel.',
   },
 
   open: {
     title: 'Secret',
     passwordLabel: 'Password',
-    passwordOptional: 'Password · optional',
+    passwordRequired: 'Enter the password.',
     passwordShow: 'Show password',
     passwordHide: 'Hide password',
     reveal: 'Reveal secret',
     revealing: 'Reading…',
     unavailable: 'Link unavailable',
-    missingKey: 'Key missing from the address. The secret was not consumed: open the original link again.',
-    keyFailed: 'Invalid key',
-    noteSingleRead: 'One read only. No recovery',
+    decryptionFailed: 'The text could not be shown. Ask the sender for a new link.',
   },
 
   control: {
     title: 'Control',
     stateLabel: 'State',
-    pending: 'Pending',
-    read: 'Read',
+    pending: 'Not yet read',
+    read: 'Link used',
     expired: 'Expired',
     cancelled: 'Cancelled',
     unavailable: 'Link unavailable',
@@ -337,9 +330,8 @@ const en: Dictionary = {
     copied: 'Copied',
     copyFailed: 'Copy failed',
     consumed: 'Secret unavailable',
-    consumedHint: 'This link was already read or has expired.',
-    spentTitle: 'Link spent',
-    spentHint: 'The secret was read and the link can no longer be reopened.',
+    consumedHint: 'Ask the sender for a new link.',
+    spentHint: 'Copy the text before closing this page.',
   },
 
   errors: {
@@ -350,8 +342,8 @@ const en: Dictionary = {
     invalidExpiry: 'Invalid expiry',
     passwordTooLong: 'Password too long',
     passwordRejected: 'Do not send the password',
-    badPassword: 'Incorrect password',
-    badKey: 'Key does not match. The secret was not consumed.',
+    badPassword: 'Check the password and make sure you are using the original link.',
+    badKey: 'Reopen the original link or ask the sender to resend it.',
     unavailable: 'Link unavailable',
     rateLimited: 'Too many requests. Try again later.',
     crossOrigin: 'Request not allowed',
@@ -363,7 +355,6 @@ const en: Dictionary = {
 
   notFound: {
     title: 'Page not found',
-    message: 'This address does not exist.',
     home: 'Create a new secret',
   },
 

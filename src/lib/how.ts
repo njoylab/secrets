@@ -11,18 +11,18 @@ import type { LegalDocument } from './legal.ts';
 const howIt: LegalDocument = {
   title: 'Come funziona',
   summary: 'Cosa succede a un segreto, dalla creazione alla lettura.',
-  updated: '2026-10-14',
+  updated: '2026-11-06',
   sections: [
     {
       heading: '1. Creazione',
       blocks: [
         {
           kind: 'p',
-          text: 'Il browser genera una chiave casuale e cifra il testo con AES-256-GCM prima di inviarlo. Al server arrivano solo il testo cifrato e la scadenza scelta: 1 ora, 1 giorno, 7 giorni o 30 giorni. Limite: 50 KiB.',
+          text: 'Il browser cifra il testo prima di inviarlo. Il server riceve il testo cifrato, la scadenza scelta, un dato per verificare la richiesta di lettura e l’indicazione che il segreto è protetto da password, se l’hai impostata. Puoi condividere fino a 50 KiB per 1 ora, 1 giorno, 7 giorni o 30 giorni.',
         },
         {
           kind: 'p',
-          text: 'La chiave è nel link, dopo #. I browser non inviano quella parte al server, che quindi non può decifrare il testo.',
+          text: 'Condividi il link completo. La parte dopo # contiene la chiave che serve al browser per decifrare il testo e non viene inviata al server.',
         },
       ],
     },
@@ -33,7 +33,7 @@ const howIt: LegalDocument = {
           kind: 'list',
           items: [
             'Link monouso: va al destinatario. Permette una sola lettura.',
-            'Link di controllo: tienilo tu. Mostra lo stato (in attesa, letto, scaduto, annullato) e permette di annullare il segreto finché nessuno lo ha letto. Non permette di leggerlo.',
+            'Link di controllo: tienilo per verificare lo stato o annullare il segreto prima che venga letto o scada. Non permette di leggere il testo.',
           ],
         },
       ],
@@ -43,11 +43,11 @@ const howIt: LegalDocument = {
       blocks: [
         {
           kind: 'p',
-          text: 'La password viene combinata con la chiave del link nel browser. Non viene inviata né salvata: senza password il link da solo non basta. Inviala su un canale diverso dal link.',
+          text: 'Se imposti una password, per leggere il segreto servono sia il link sia la password. La password resta nel browser. Inviala su un altro canale.',
         },
         {
           kind: 'p',
-          text: 'Una password errata non consuma il segreto. I tentativi sono limitati per indirizzo IP e possono avvenire solo tramite il servizio.',
+          text: 'Se sbagli password, puoi riprovare. Il servizio limita il numero di tentativi.',
         },
       ],
     },
@@ -56,11 +56,11 @@ const howIt: LegalDocument = {
       blocks: [
         {
           kind: 'p',
-          text: 'Aprire il link non consuma nulla: anteprime di chat e prefetch sono innocui. Il segreto viene consumato solo quando il destinatario preme «Mostra segreto». Il server lo cancella e poi consegna il testo cifrato, che il browser decifra.',
+          text: 'Puoi aprire il link senza usare l’unica lettura. Quando premi «Mostra segreto» e la verifica riesce, il server cancella il segreto prima di inviare il testo cifrato al browser.',
         },
         {
           kind: 'p',
-          text: 'Una sola lettura, nessun recupero. Se la risposta si perde dopo la cancellazione, il segreto non è più leggibile e il link di controllo indica «letto». Se il destinatario trova il link già non disponibile, qualcun altro potrebbe averlo aperto prima.',
+          text: 'Dopo la cancellazione, il link di controllo indica «Link usato». Se il testo non arriva o il browser non riesce a mostrarlo, chiedi al mittente un nuovo link.',
         },
       ],
     },
@@ -71,8 +71,8 @@ const howIt: LegalDocument = {
           kind: 'list',
           items: [
             'Il testo cifrato dal browser, cifrato una seconda volta con una chiave tenuta fuori dal database.',
-            "Gli hash dei due link e un'impronta di verifica: nulla da cui ricavare la chiave o la password.",
-            'Dopo lettura, scadenza o annullamento, solo una ricevuta con stato e orari, senza contenuto. Resta fino alla scadenza originale e almeno 7 giorni dopo la chiusura.',
+            'Le impronte dei due token e un dato di verifica protetto da una chiave del servizio.',
+            'Dopo la lettura o l’annullamento resta solo lo stato con le relative date, senza il testo. Alla scadenza il testo diventa subito inaccessibile e viene rimosso dalla pulizia periodica. Lo stato resta fino alla scadenza originale o a 7 giorni dalla chiusura, a seconda di quale data viene dopo.',
           ],
         },
       ],
@@ -85,7 +85,7 @@ const howIt: LegalDocument = {
           items: [
             'Non è una cifratura end-to-end verificata da una revisione indipendente: un dispositivo compromesso o una modifica malevola della pagina possono esporre il segreto.',
             'Chiunque abbia il link completo, e la password se impostata, può leggerlo una volta.',
-            'La cancellazione non rimuove subito i dati da log di transazione e backup del database, che restano comunque cifrati.',
+            'Dopo la cancellazione, copie cifrate del testo possono restare nei registri e nei backup del database.',
             'I dettagli sul trattamento dei dati sono nella [[privacy]].',
           ],
         },
@@ -97,18 +97,18 @@ const howIt: LegalDocument = {
 const howEn: LegalDocument = {
   title: 'How it works',
   summary: 'What happens to a secret, from creation to reading.',
-  updated: '2026-10-14',
+  updated: '2026-11-06',
   sections: [
     {
       heading: '1. Creation',
       blocks: [
         {
           kind: 'p',
-          text: 'Your browser generates a random key and encrypts the text with AES-256-GCM before sending it. The server receives only the ciphertext and the chosen expiry: 1 hour, 1 day, 7 days or 30 days. Limit: 50 KiB.',
+          text: 'Your browser encrypts the text before sending it. The server receives the encrypted text, the chosen expiry, data to verify the request to read it, and whether you set a password. You can share up to 50 KiB for 1 hour, 1 day, 7 days or 30 days.',
         },
         {
           kind: 'p',
-          text: 'The key is in the link, after #. Browsers never send that part to the server, so the server cannot decrypt the text.',
+          text: 'Share the full link. The part after # contains the key your browser needs to decrypt the text and is never sent to the server.',
         },
       ],
     },
@@ -119,7 +119,7 @@ const howEn: LegalDocument = {
           kind: 'list',
           items: [
             'One-time link: send it to the recipient. It allows a single read.',
-            'Control link: keep it. It shows the state (pending, read, expired, cancelled) and lets you cancel the secret until someone reads it. It cannot read the secret.',
+            'Control link: keep it to check the status or cancel the secret before it is read or expires. It cannot be used to read the text.',
           ],
         },
       ],
@@ -129,11 +129,11 @@ const howEn: LegalDocument = {
       blocks: [
         {
           kind: 'p',
-          text: 'The password is combined with the link key in the browser. It is never sent or stored: without it, the link alone is not enough. Send it over a different channel than the link.',
+          text: 'If you set a password, the recipient needs both the link and the password to read the secret. The password stays in the browser. Send it through a different channel.',
         },
         {
           kind: 'p',
-          text: 'A wrong password does not consume the secret. Attempts are rate limited per IP address and can only be made through the service.',
+          text: 'If you enter the wrong password, you can try again. The service limits the number of attempts.',
         },
       ],
     },
@@ -142,11 +142,11 @@ const howEn: LegalDocument = {
       blocks: [
         {
           kind: 'p',
-          text: 'Opening the link consumes nothing: chat previews and prefetching are harmless. The secret is consumed only when the recipient presses “Reveal secret”. The server deletes it, then returns the ciphertext, which the browser decrypts.',
+          text: 'You can open the link without using up the one-time read. When you select “Reveal secret” and verification succeeds, the server deletes the secret before sending the encrypted text to your browser.',
         },
         {
           kind: 'p',
-          text: 'One read, no recovery. If the response is lost after the deletion, the secret can no longer be read and the control link shows “read”. If the recipient finds the link already unavailable, someone else may have opened it first.',
+          text: 'After deletion, the control link shows “Link used”. If the text does not arrive or your browser cannot display it, ask the sender for a new link.',
         },
       ],
     },
@@ -157,8 +157,8 @@ const howEn: LegalDocument = {
           kind: 'list',
           items: [
             'The ciphertext from the browser, encrypted a second time with a key kept outside the database.',
-            'Hashes of both links and a verification fingerprint: nothing that yields the key or the password.',
-            'After a read, expiry or cancellation, only a receipt with the state and times, without content. It is kept until the original expiry and for at least 7 days after closing.',
+            'Hashes of both tokens and verification data protected by a key held by the service.',
+            'After a read or cancellation, only the status and its timestamps remain. On expiry the text immediately becomes inaccessible, and periodic cleanup removes it. The status is kept until the original expiry or 7 days after closure, whichever is later.',
           ],
         },
       ],
@@ -171,7 +171,7 @@ const howEn: LegalDocument = {
           items: [
             'This is not end-to-end encryption verified by an independent review: a compromised device or a malicious change to the page can expose the secret.',
             'Anyone holding the full link, and the password if set, can read it once.',
-            'Deletion does not immediately remove data from database transaction logs and backups, where it stays encrypted.',
+            'Encrypted copies of the text can remain in database logs and backups after deletion.',
             'Data processing is described in the [[privacy]].',
           ],
         },
